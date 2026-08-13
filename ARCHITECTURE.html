@@ -1,0 +1,910 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Architecture and data-flow walkthrough of the Moto Geometry codebase: layering, solver chain, render cycle and verification strategy.">
+<title>Moto Geometry — Architecture &amp; Flow</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+
+  :root {
+    --ground: #eef1ee;
+    --sheet: #fbfcfa;
+    --sheet-2: #f4f6f3;
+    --ink: #16323f;
+    --ink-soft: #3d5762;
+    --muted: #5f7079;
+    --rule: #ccd5d1;
+    --rule-soft: #dfe5e1;
+    --accent: #c2512b;
+    --hv: #22648b;
+    --lv: #1c6349;
+    --comms: #91590f;
+    --dead: #9aa5a3;
+      --shadow: 0 1px 0 rgba(22,50,63,.05), 0 10px 30px -22px rgba(22,50,63,.5);
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0c1418;
+      --sheet: #121e24;
+      --sheet-2: #17252c;
+      --ink: #dde8e7;
+      --ink-soft: #b3c4c6;
+      --muted: #8ba0a7;
+      --rule: #2b3f47;
+      --rule-soft: #223138;
+      --accent: #ef7c53;
+      --hv: #64aad6;
+      --lv: #5cb98f;
+      --comms: #d8a552;
+      --dead: #6b7d80;
+      --shadow: 0 1px 0 rgba(0,0,0,.3), 0 12px 34px -22px rgba(0,0,0,.9);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #0c1418;
+    --sheet: #121e24;
+    --sheet-2: #17252c;
+    --ink: #dde8e7;
+    --ink-soft: #b3c4c6;
+    --muted: #8ba0a7;
+    --rule: #2b3f47;
+    --rule-soft: #223138;
+    --accent: #ef7c53;
+    --hv: #64aad6;
+    --lv: #5cb98f;
+    --comms: #d8a552;
+    --dead: #6b7d80;
+    --shadow: 0 1px 0 rgba(0,0,0,.3), 0 12px 34px -22px rgba(0,0,0,.9);
+  }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .sheet {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 0 20px 96px;
+  }
+
+  /* ---------- title block ---------- */
+  .titleblock {
+    border: 1px solid var(--rule);
+    background: var(--sheet);
+    box-shadow: var(--shadow);
+    margin: 28px 0 0;
+  }
+  .titleblock-main {
+    padding: 30px 30px 26px;
+    border-bottom: 1px solid var(--rule);
+  }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 14px;
+  }
+  h1 {
+    font-family: var(--mono);
+    font-size: clamp(28px, 4.6vw, 44px);
+    line-height: 1.08;
+    letter-spacing: -.02em;
+    font-weight: 700;
+    margin: 0 0 14px;
+    text-wrap: balance;
+  }
+  .standfirst {
+    margin: 0;
+    max-width: 64ch;
+    font-size: 17px;
+    color: var(--ink-soft);
+  }
+  .titleblock-meta {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  }
+  .tb-cell {
+    padding: 13px 18px;
+    border-right: 1px solid var(--rule-soft);
+    font-family: var(--mono);
+  }
+  .tb-cell:last-child { border-right: 0; }
+  .tb-cell dt {
+    font-size: 10px;
+    letter-spacing: .13em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 3px;
+  }
+  .tb-cell dd {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ---------- layout ---------- */
+  .layout {
+    display: grid;
+    grid-template-columns: 210px minmax(0, 1fr);
+    gap: 52px;
+    margin-top: 44px;
+    align-items: start;
+  }
+  @media (max-width: 940px) {
+    .layout { grid-template-columns: minmax(0, 1fr); gap: 34px; }
+    .index { position: static !important; }
+  }
+
+  .index {
+    position: sticky;
+    top: 22px;
+    font-family: var(--mono);
+    font-size: 12.5px;
+  }
+  .index p {
+    margin: 0 0 12px;
+    font-size: 10px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--muted);
+    padding-bottom: 9px;
+    border-bottom: 1px solid var(--rule);
+  }
+  .index ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+  .index a {
+    display: flex;
+    gap: 10px;
+    padding: 4px 6px 4px 0;
+    color: var(--ink-soft);
+    text-decoration: none;
+    border-radius: 3px;
+  }
+  .index a:hover { color: var(--accent); }
+  .index a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .index .n { color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  main { min-width: 0; display: flex; flex-direction: column; gap: 60px; }
+  section { scroll-margin-top: 22px; }
+
+  h2 {
+    font-family: var(--mono);
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: -.01em;
+    margin: 0 0 8px;
+    padding-bottom: 12px;
+    border-bottom: 2px solid var(--ink);
+    display: flex;
+    align-items: baseline;
+    gap: 13px;
+  }
+  h2 .n {
+    font-size: 12px;
+    color: var(--accent);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: .08em;
+  }
+  h3 {
+    font-family: var(--mono);
+    font-size: 14px;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    font-weight: 700;
+    color: var(--ink);
+    margin: 34px 0 12px;
+  }
+  p { margin: 0 0 16px; max-width: 70ch; }
+  section > p:first-of-type { margin-top: 18px; }
+  ul, ol.body { max-width: 70ch; padding-left: 20px; }
+  li { margin-bottom: 7px; }
+  strong { font-weight: 650; }
+  a { color: var(--accent); }
+
+  code {
+    font-family: var(--mono);
+    font-size: .88em;
+    background: var(--sheet-2);
+    border: 1px solid var(--rule-soft);
+    border-radius: 3px;
+    padding: .08em .34em;
+  }
+  pre {
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.6;
+    background: var(--sheet);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--hv);
+    padding: 16px 18px;
+    overflow-x: auto;
+    margin: 0 0 18px;
+  }
+  pre code { background: none; border: 0; padding: 0; font-size: inherit; }
+  .cmt { color: var(--muted); }
+  .key { color: var(--accent); }
+
+  /* ---------- callout ---------- */
+  .thesis {
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--accent);
+    background: var(--sheet);
+    padding: 22px 24px;
+    margin: 22px 0;
+    box-shadow: var(--shadow);
+  }
+  .thesis p:last-child { margin-bottom: 0; }
+  .thesis .lead {
+    font-family: var(--mono);
+    font-size: 17px;
+    font-weight: 700;
+    letter-spacing: -.01em;
+    color: var(--accent);
+  }
+  .note {
+    border-left: 3px solid var(--rule);
+    padding: 4px 0 4px 18px;
+    color: var(--ink-soft);
+    margin: 20px 0;
+    max-width: 70ch;
+  }
+  .note p:last-child { margin-bottom: 0; }
+
+  /* ---------- tables ---------- */
+  .table-wrap { overflow-x: auto; border: 1px solid var(--rule); background: var(--sheet); margin: 0 0 20px; box-shadow: var(--shadow); }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; min-width: 480px; }
+  th, td { text-align: left; padding: 10px 15px; border-bottom: 1px solid var(--rule-soft); vertical-align: top; }
+  thead th {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: .13em;
+    text-transform: uppercase;
+    color: var(--muted);
+    background: var(--sheet-2);
+    border-bottom: 1px solid var(--rule);
+    white-space: nowrap;
+  }
+  tbody tr:last-child td { border-bottom: 0; }
+  td.mono, th.mono { font-family: var(--mono); font-size: 13px; }
+  td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  tr.is-dead td { color: var(--dead); }
+
+  .tag {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    padding: 2px 7px;
+    border: 1px solid currentColor;
+    border-radius: 2px;
+    white-space: nowrap;
+  }
+  .tag.live { color: var(--lv); }
+  .tag.dead { color: var(--accent); }
+  .tag.test { color: var(--hv); }
+  .tag.gone { color: var(--comms); }
+
+  /* ---------- figures ---------- */
+  figure {
+    margin: 26px 0;
+    border: 1px solid var(--rule);
+    background: var(--sheet);
+    box-shadow: var(--shadow);
+  }
+  .fig-body { padding: 22px 20px 8px; overflow-x: auto; }
+  figure svg { display: block; width: 100%; max-width: 100%; height: auto; color: var(--ink); }
+  figcaption {
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.55;
+    color: var(--muted);
+    padding: 12px 20px 15px;
+    border-top: 1px solid var(--rule-soft);
+  }
+  .svg-box { fill: var(--sheet); stroke: currentColor; stroke-width: 1.25; }
+  .svg-box-alt { fill: var(--sheet-2); stroke: currentColor; stroke-width: 1.25; }
+  .svg-box-accent { fill: none; stroke: var(--accent); stroke-width: 1.6; }
+  .svg-t { font-family: var(--mono); font-size: 12px; font-weight: 600; fill: currentColor; }
+  .svg-t-sm { font-family: var(--mono); font-size: 10px; fill: var(--muted); }
+  .svg-t-accent { font-family: var(--mono); font-size: 10px; fill: var(--accent); font-weight: 600; }
+  .svg-line { stroke: currentColor; stroke-width: 1.25; fill: none; }
+  .svg-line-accent { stroke: var(--accent); stroke-width: 1.5; fill: none; }
+  .svg-line-soft { stroke: var(--rule); stroke-width: 1; fill: none; }
+
+  /* ---------- cards ---------- */
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; margin: 20px 0; }
+  .card { border: 1px solid var(--rule); background: var(--sheet); padding: 16px 17px; box-shadow: var(--shadow); }
+  .card h4 { font-family: var(--mono); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; margin: 0 0 8px; color: var(--muted); }
+  .card p { margin: 0; font-size: 14.5px; }
+  .card .big { font-family: var(--mono); font-size: 21px; font-weight: 700; letter-spacing: -.01em; display: block; margin-bottom: 4px; }
+
+  footer {
+    margin-top: 70px;
+    padding-top: 20px;
+    border-top: 1px solid var(--rule);
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--muted);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 26px;
+  }
+</style>
+</head>
+<body>
+
+<div class="sheet">
+
+  <header class="titleblock">
+    <div class="titleblock-main">
+      <p class="eyebrow">Codebase walkthrough · EV-Moto-Design</p>
+      <h1>Moto Geometry</h1>
+      <p class="standfirst">A zero-dependency browser application for motorcycle concept architecture — packaging, chassis geometry, suspension, powertrain, battery and E/E closure held in one governed configuration. This sheet explains how it is layered and how a keystroke reaches every dependent number.</p>
+    </div>
+    <dl class="titleblock-meta">
+      <div class="tb-cell"><dt>Contract</dt><dd>PRD v1.3</dd></div>
+      <div class="tb-cell"><dt>Live scripts</dt><dd>4</dd></div>
+      <div class="tb-cell"><dt>Solver lines</dt><dd>1,040</dd></div>
+      <div class="tb-cell"><dt>Dependencies</dt><dd>None</dd></div>
+      <div class="tb-cell"><dt>Build step</dt><dd>None</dd></div>
+      <div class="tb-cell"><dt>Dead weight</dt><dd>1.86 MB</dd></div>
+    </dl>
+  </header>
+
+  <div class="layout">
+
+    <nav class="index" aria-label="Sheet index">
+      <p>Sheet index</p>
+      <ol>
+        <li><a href="#s1"><span class="n">01</span><span>The core idea</span></a></li>
+        <li><a href="#s2"><span class="n">02</span><span>File inventory</span></a></li>
+        <li><a href="#s3"><span class="n">03</span><span>Layering</span></a></li>
+        <li><a href="#s4"><span class="n">04</span><span>State</span></a></li>
+        <li><a href="#s5"><span class="n">05</span><span>Solver chain</span></a></li>
+        <li><a href="#s6"><span class="n">06</span><span>Render cycle</span></a></li>
+        <li><a href="#s7"><span class="n">07</span><span>Staleness</span></a></li>
+        <li><a href="#s8"><span class="n">08</span><span>Drawing engine</span></a></li>
+        <li><a href="#s9"><span class="n">09</span><span>Verification</span></a></li>
+        <li><a href="#s10"><span class="n">10</span><span>Where to edit</span></a></li>
+      </ol>
+    </nav>
+
+    <main>
+
+      <!-- 01 -->
+      <section id="s1">
+        <h2><span class="n">01</span> The idea that explains every decision</h2>
+        <p>Open <code>index.html</code> in a browser and the whole thing runs. No build, no npm, no server, no network request. All physics is hand-written JavaScript; all state lives in memory and <code>localStorage</code>.</p>
+
+        <div class="thesis">
+          <p class="lead">A finite number is not an accepted design.</p>
+          <p>The codebase treats <em>mathematical validity</em> and <em>engineering acceptance</em> as two independent axes, and never lets the first imply the second.</p>
+        </div>
+
+        <p>Every result object carries both axes, so the interface can say “this equation solved cleanly” and “nobody has approved this” in the same breath:</p>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Axis</th><th class="mono">Field</th><th>Values</th></tr></thead>
+            <tbody>
+              <tr><td>Did the maths run?</td><td class="mono">runtime</td><td class="mono">current · stale · failed</td></tr>
+              <tr><td>Is it engineering-approved?</td><td class="mono">assessment</td><td class="mono">not_evaluated · conflict_invalid</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p>Nothing in the application can promote a value to “approved” — that requires physical validation outside the tool. It is why the release gates read <em>not evaluated</em> in perpetuity, why the benchmark table states outright that proximity to a Yamaha creates no pass, and why almost every panel carries a scope disclaimer.</p>
+      </section>
+
+      <!-- 02 -->
+      <section id="s2">
+        <h2><span class="n">02</span> What is actually in the repository</h2>
+        <p>Six files make up the running application. Three more sit in the tree doing nothing at all — and they account for three quarters of the repository by size.</p>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th class="mono">File</th><th class="num">Size</th><th>Role</th><th>Status</th></tr></thead>
+            <tbody>
+              <tr><td class="mono">index.html</td><td class="num">2.6 KB</td><td>Shell only — header, context bar, empty <code>#nav</code> and <code>#main</code></td><td><span class="tag live">Live</span></td></tr>
+              <tr><td class="mono">styles.css</td><td class="num">15 KB</td><td>Layout, badge and status colours</td><td><span class="tag live">Live</span></td></tr>
+              <tr><td class="mono">prd-data.js</td><td class="num">12 KB</td><td>Tab order, every default, component catalogue → <code>PRD_DATA</code></td><td><span class="tag live">Live</span></td></tr>
+              <tr><td class="mono">powertrain-benchmarks.js</td><td class="num">4 KB</td><td>Five frozen reference bikes with provenance URLs</td><td><span class="tag live">Live</span></td></tr>
+              <tr><td class="mono">engineering-core.js</td><td class="num">78 KB</td><td><strong>All physics.</strong> Pure functions, zero DOM access</td><td><span class="tag live">Live</span></td></tr>
+              <tr><td class="mono">app.js</td><td class="num">120 KB</td><td>State, persistence, rendering, SVG, canvas, events</td><td><span class="tag live">Live</span></td></tr>
+              <tr><td class="mono">verify-core.js</td><td class="num">12 KB</td><td>Node regression suite — <code>node verify-core.js</code></td><td><span class="tag test">Test</span></td></tr>
+              <tr class="is-dead"><td class="mono">gearing-commander-dataset.js</td><td class="num">1.8 MB</td><td>2,037 scraped gearing records. Nothing imports it</td><td><span class="tag dead">Orphan</span></td></tr>
+              <tr class="is-dead"><td class="mono">electrical-architecture.js</td><td class="num">38 KB</td><td>Older standalone electrical calculator</td><td><span class="tag dead">Orphan</span></td></tr>
+              <tr class="is-dead"><td class="mono">engineering-calculators.js</td><td class="num">28 KB</td><td>Older standalone calculator page</td><td><span class="tag dead">Orphan</span></td></tr>
+              <tr class="is-dead"><td class="mono">output/documents/…</td><td class="num">—</td><td>The governing PRD and JSON contract the README points to</td><td><span class="tag gone">Missing</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="cards">
+          <div class="card">
+            <h4>Why the orphans are orphans</h4>
+            <p>They target DOM ids — <code>elecSeriesCells</code>, <code>elecPackMass</code> — that no longer exist in the current HTML. Leftovers from an earlier version. Deleting all three changes nothing.</p>
+          </div>
+          <div class="card">
+            <h4>The stranded dataset</h4>
+            <p>The live benchmark feature reads the five-record <code>powertrain-benchmarks.js</code>. The 2,037-record scrape is never consulted.</p>
+          </div>
+          <div class="card">
+            <h4>The missing contract</h4>
+            <p>The governing PRD is not in version control. <code>prd-data.js</code> and <code>verify-core.js</code> are the only surviving encoding of it.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- 03 -->
+      <section id="s3">
+        <h2><span class="n">03</span> Layering</h2>
+        <p>Script order in <code>index.html</code> is also the dependency order. Each layer may read downward and never upward — and the boundary that matters most is the one under <code>app.js</code>.</p>
+
+        <figure>
+          <div class="fig-body">
+            <svg viewBox="0 0 800 400" role="img" aria-label="Four-layer stack: prd-data supplies defaults to engineering-core, which returns results to app.js, which writes HTML into index.html. Engineering-core never touches the DOM.">
+              <defs>
+                <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                  <polygon points="0,0 10,5 0,10" fill="currentColor"/>
+                </marker>
+                <marker id="ar-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                  <polygon points="0,0 10,5 0,10" fill="var(--accent)"/>
+                </marker>
+              </defs>
+
+              <!-- L4 index.html -->
+              <rect class="svg-box" x="40" y="20" width="500" height="52" rx="3"/>
+              <text class="svg-t" x="60" y="43">index.html</text>
+              <text class="svg-t-sm" x="60" y="60">shell only · empty #nav and #main</text>
+              <text class="svg-t-sm" x="560" y="50">DOM</text>
+
+              <!-- arrow -->
+              <line class="svg-line" x1="290" y1="122" x2="290" y2="80" marker-end="url(#ar)"/>
+              <text class="svg-t-sm" x="302" y="106">#main.innerHTML = html</text>
+
+              <!-- L3 app.js -->
+              <rect class="svg-box" x="40" y="128" width="500" height="66" rx="3"/>
+              <text class="svg-t" x="60" y="152">app.js</text>
+              <text class="svg-t-sm" x="60" y="170">state · localStorage · 10 renderers · 5 SVG diagrams</text>
+              <text class="svg-t-sm" x="60" y="184">4 canvas charts · all event binding</text>
+              <text class="svg-t-sm" x="560" y="166">IIFE</text>
+
+              <!-- arrow -->
+              <line class="svg-line-accent" x1="200" y1="252" x2="200" y2="202" marker-end="url(#ar-a)"/>
+              <text class="svg-t-accent" x="212" y="232">outputs = calculate(state)</text>
+
+              <line class="svg-line" x1="470" y1="252" x2="470" y2="202" marker-end="url(#ar)"/>
+
+              <!-- L2 core + benchmarks -->
+              <rect class="svg-box-accent" x="40" y="258" width="340" height="66" rx="3"/>
+              <text class="svg-t" x="60" y="282">engineering-core.js</text>
+              <text class="svg-t-sm" x="60" y="300">pure physics · no DOM · no state</text>
+              <text class="svg-t-accent" x="60" y="316">the testable boundary</text>
+
+              <rect class="svg-box-alt" x="396" y="258" width="144" height="66" rx="3"/>
+              <text class="svg-t" x="410" y="282">powertrain-</text>
+              <text class="svg-t" x="410" y="297">benchmarks.js</text>
+              <text class="svg-t-sm" x="410" y="313">5 records</text>
+              <text class="svg-t-sm" x="560" y="295">globals</text>
+
+              <!-- arrow -->
+              <line class="svg-line" x1="200" y1="376" x2="200" y2="332" marker-end="url(#ar)"/>
+              <text class="svg-t-sm" x="212" y="358">defaults · notes</text>
+
+              <!-- L1 -->
+              <rect class="svg-box" x="40" y="382" width="500" height="14" rx="2"/>
+              <text class="svg-t" x="60" y="393" font-size="11">prd-data.js — tabs · defaults · componentDefaults · sourceNotes</text>
+
+              <!-- side rule -->
+              <line class="svg-line-soft" x1="640" y1="20" x2="640" y2="396"/>
+              <text class="svg-t-sm" x="652" y="46">reads</text>
+              <text class="svg-t-sm" x="652" y="60">downward</text>
+              <text class="svg-t-sm" x="652" y="74">only</text>
+            </svg>
+          </div>
+          <figcaption>The dashed boundary is the whole trick: because <code>engineering-core.js</code> never touches <code>document</code>, the Node test suite loads it with a single <code>global.window = global</code> shim and runs the full model headlessly.</figcaption>
+        </figure>
+
+        <p>Every file is wrapped as <code>(function (global) { "use strict"; … })(window)</code>. No ES modules, no bundler, and no global namespace pollution beyond the three published objects.</p>
+      </section>
+
+      <!-- 04 -->
+      <section id="s4">
+        <h2><span class="n">04</span> One object holds the configuration</h2>
+        <p><code>loadState()</code> clones <code>PRD_DATA.defaults</code>, deep-merges whatever is in <code>localStorage</code>, then repairs legacy data — collapsing retired scenario names into the three supported macro states and deleting obsolete sag keys a previous version wrote.</p>
+
+<pre><code>state = {
+  meta: {
+    project, configuration, revision,        <span class="cmt">// increments on EVERY edit</span>
+    units, frame, loadCase,                  <span class="cmt">// Kerb | Solo rider | Rider + pillion</span>
+    dutyCase,                                <span class="cmt">// Road | Urban | Grade | Performance</span>
+    electricalScenario,                      <span class="cmt">// drive | charge | off</span>
+    architectureVariant,                     <span class="cmt">// 5 E/E topology templates</span>
+    domainRevisions: { stance, steering, … } <span class="cmt">// per-domain counters</span>
+  },
+  stance,     <span class="cmt">// 55 fields — wheelbase, rake, tyres, hardpoints, anthropometry</span>
+  steering, suspension, antiSquat, sensitivity, sag,
+  powertrain, vehicle, battery, electrical,
+  components: [ … ]  <span class="cmt">// 15 electrical instances: mass, X/Z, power, states</span>
+}</code></pre>
+
+        <h3>Two storage keys, deliberately separate</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th class="mono">Key</th><th>Holds</th><th>Bumps revision?</th></tr></thead>
+            <tbody>
+              <tr><td class="mono">moto-geometry-prd-v1.3</td><td>The engineering configuration</td><td><strong>Yes</strong></td></tr>
+              <tr><td class="mono">moto-geometry-ui-v1.3</td><td>Diagram node positions, view layer, open panels</td><td><strong>No</strong></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The split is enforced on purpose. Dragging a node in the electrical network is a presentation change and must never create a design revision — a rule the code repeats in three separate places.</p>
+      </section>
+
+      <!-- 05 -->
+      <section id="s5">
+        <h2><span class="n">05</span> The solver chain</h2>
+        <p><code>EngineeringCore.calculate(state)</code> runs the entire model in a fixed order. Each function returns <code>{ok: true, …}</code> or <code>invalid("message")</code> — there is no exception-based control flow, and no partial result is ever presented as current.</p>
+
+        <figure>
+          <div class="fig-body">
+            <svg viewBox="0 0 880 440" role="img" aria-label="Solver dependency graph: mass properties solved for three load cases feeds five solvers, which feed sag, anti-squat, vehicle and battery studies; sensitivity re-runs the whole calculate function three times.">
+              <defs>
+                <marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                  <polygon points="0,0 10,5 0,10" fill="currentColor"/>
+                </marker>
+                <marker id="ar2a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                  <polygon points="0,0 10,5 0,10" fill="var(--accent)"/>
+                </marker>
+              </defs>
+
+              <!-- state -->
+              <rect class="svg-box-alt" x="360" y="10" width="160" height="34" rx="3"/>
+              <text class="svg-t" x="440" y="32" text-anchor="middle">state</text>
+              <line class="svg-line" x1="440" y1="44" x2="440" y2="72" marker-end="url(#ar2)"/>
+
+              <!-- mass props -->
+              <rect class="svg-box" x="310" y="78" width="260" height="46" rx="3"/>
+              <text class="svg-t" x="440" y="99" text-anchor="middle">componentMassProperties × 3</text>
+              <text class="svg-t-sm" x="440" y="114" text-anchor="middle">Kerb · Solo rider · Rider + pillion</text>
+
+              <!-- fan-out bus -->
+              <line class="svg-line" x1="440" y1="124" x2="440" y2="142"/>
+              <line class="svg-line" x1="96" y1="142" x2="784" y2="142"/>
+              <text class="svg-t-sm" x="452" y="137">CG · front and rear axle load</text>
+
+              <line class="svg-line" x1="96" y1="142" x2="96" y2="168" marker-end="url(#ar2)"/>
+              <line class="svg-line" x1="268" y1="142" x2="268" y2="168" marker-end="url(#ar2)"/>
+              <line class="svg-line" x1="440" y1="142" x2="440" y2="168" marker-end="url(#ar2)"/>
+              <line class="svg-line" x1="612" y1="142" x2="612" y2="168" marker-end="url(#ar2)"/>
+              <line class="svg-line" x1="784" y1="142" x2="784" y2="168" marker-end="url(#ar2)"/>
+
+              <!-- row 1 -->
+              <rect class="svg-box" x="21" y="174" width="150" height="52" rx="3"/>
+              <text class="svg-t" x="96" y="196" text-anchor="middle">ergonomics</text>
+              <text class="svg-t-sm" x="96" y="212" text-anchor="middle">2-link IK</text>
+
+              <rect class="svg-box" x="193" y="174" width="150" height="52" rx="3"/>
+              <text class="svg-t" x="268" y="196" text-anchor="middle">steering</text>
+              <text class="svg-t-sm" x="268" y="212" text-anchor="middle">trail · flop · limits</text>
+
+              <rect class="svg-box" x="365" y="174" width="150" height="52" rx="3"/>
+              <text class="svg-t" x="440" y="196" text-anchor="middle">suspension</text>
+              <text class="svg-t-sm" x="440" y="212" text-anchor="middle">linkage · motion ratio</text>
+
+              <rect class="svg-box" x="537" y="174" width="150" height="52" rx="3"/>
+              <text class="svg-t" x="612" y="196" text-anchor="middle">gearing</text>
+              <text class="svg-t-sm" x="612" y="212" text-anchor="middle">ratios · sprockets</text>
+
+              <rect class="svg-box" x="709" y="174" width="150" height="52" rx="3"/>
+              <text class="svg-t" x="784" y="196" text-anchor="middle">electrical</text>
+              <text class="svg-t-sm" x="784" y="212" text-anchor="middle">pack · LV graph</text>
+
+              <!-- row1 to row2 -->
+              <line class="svg-line" x1="268" y1="226" x2="268" y2="264" marker-end="url(#ar2)"/>
+              <path class="svg-line" d="M400 226 L400 246 L306 246 L306 264" marker-end="url(#ar2)"/>
+              <line class="svg-line" x1="470" y1="226" x2="470" y2="264" marker-end="url(#ar2)"/>
+              <line class="svg-line" x1="612" y1="226" x2="612" y2="264" marker-end="url(#ar2)"/>
+              <line class="svg-line" x1="784" y1="226" x2="784" y2="264" marker-end="url(#ar2)"/>
+              <text class="svg-t-sm" x="316" y="243">kinematics</text>
+
+              <!-- row 2 -->
+              <rect class="svg-box" x="193" y="270" width="150" height="52" rx="3"/>
+              <text class="svg-t" x="268" y="292" text-anchor="middle">sag</text>
+              <text class="svg-t-sm" x="268" y="308" text-anchor="middle">64-step bisection</text>
+
+              <rect class="svg-box" x="395" y="270" width="150" height="52" rx="3"/>
+              <text class="svg-t" x="470" y="292" text-anchor="middle">antiSquat</text>
+              <text class="svg-t-sm" x="470" y="308" text-anchor="middle">force-line</text>
+
+              <rect class="svg-box" x="537" y="270" width="150" height="52" rx="3"/>
+              <text class="svg-t" x="612" y="292" text-anchor="middle">vehicleStudy</text>
+              <text class="svg-t-sm" x="612" y="308" text-anchor="middle">road load</text>
+
+              <rect class="svg-box" x="709" y="270" width="150" height="52" rx="3"/>
+              <text class="svg-t" x="784" y="292" text-anchor="middle">batteryStudy</text>
+              <text class="svg-t-sm" x="784" y="308" text-anchor="middle">range · charge</text>
+
+              <!-- sensitivity -->
+              <line class="svg-line-accent" x1="268" y1="322" x2="268" y2="358" marker-end="url(#ar2a)"/>
+              <rect class="svg-box-accent" x="160" y="364" width="300" height="52" rx="3"/>
+              <text class="svg-t" x="310" y="386" text-anchor="middle">sensitivity</text>
+              <text class="svg-t-accent" x="310" y="402" text-anchor="middle">central difference on ± step clones</text>
+
+              <!-- recursion loop -->
+              <path class="svg-line-accent" d="M460 390 L620 390 L620 440 L20 440 L20 27 L360 27" marker-end="url(#ar2a)" stroke-dasharray="5 4"/>
+              <text class="svg-t-accent" x="640" y="394">re-runs calculate() ×3</text>
+            </svg>
+          </div>
+          <figcaption>Mass properties is solved for all three load cases on every pass, so front/rear axle load is available to every downstream consumer. The dashed return path is real recursion — sensitivity re-solves the entire model on perturbed clones rather than approximating the response.</figcaption>
+        </figure>
+
+        <h3>What each solver actually does</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th class="mono">Function</th><th>Method</th></tr></thead>
+            <tbody>
+              <tr><td class="mono">tyre</td><td>Nominal diameter from width/aspect/rim — the single source of every wheel radius in the app</td></tr>
+              <tr><td class="mono">ergonomics</td><td>Two-link inverse kinematics. Circle intersection finds the elbow from shoulder + grip and the knee from hip + peg, then reports joint angles and clearances</td></tr>
+              <tr><td class="mono">steering</td><td>Foale trail, wheel flop, kinematic turn radius, quasi-static braking transfer, rigid-body wheelie and stoppie limits from the live CG</td></tr>
+              <tr><td class="mono">rearKinematicsAt</td><td>Rotates the swingarm about the pivot to a target axle height, then solves the rocker/dogbone linkage by circle intersection. Handles direct and linkage architectures</td></tr>
+              <tr><td class="mono">suspension</td><td>Sweeps that solve across travel, differentiates shock against wheel displacement for local motion ratio, derives wheel rates and the fork air spring</td></tr>
+              <tr><td class="mono">componentMassProperties</td><td>Mass-weighted CG over glider, rider, pillion, luggage and all 15 electrical components; static beam solve for axle loads. Rejects a CG outside the wheelbase</td></tr>
+              <tr><td class="mono">sag</td><td>64-iteration bisection finds where dual-rate spring force equals sprung load. Rear shock stroke is interpolated from the linkage curve, never aliased to wheel travel</td></tr>
+              <tr><td class="mono">antiSquat</td><td>Upper chain tangent between sprocket pitch circles, intersected with the swingarm line, gives the force centre and Foale percentage — cross-checked against the Cossalter reciprocal</td></tr>
+              <tr><td class="mono">gearing</td><td>Overall ratios, per-gear curves at 41 points each, sprocket pitch radii, ideal chain link count, named duty point</td></tr>
+              <tr><td class="mono">electrical</td><td>Pack S/P model, quadratic constant-V<sub>oc</sub> discharge solve, breadth-first LV reachability, DC-DC headroom, cable drop, precharge RC</td></tr>
+              <tr><td class="mono">batteryStudy</td><td>Required energy to a proposed S/P pack, AC supply limits, charge time with taper, two runtime models</td></tr>
+              <tr><td class="mono">sensitivity</td><td>Clones the state, perturbs one parameter ± step, and calls <code>calculate()</code> recursively on each clone</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>The recursion guard</h3>
+<pre><code>function sensitivity(state, calculate) {
+  const plus  = JSON.parse(JSON.stringify(state));
+  const minus = JSON.parse(JSON.stringify(state));
+  plus [path[0]][path[1]] += step;
+  minus[path[0]][path[1]] -= step;
+
+  const baseResults  = calculate(base,  <span class="key">false</span>);  <span class="cmt">// ← false disables sensitivity,</span>
+  const plusResults  = calculate(plus,  <span class="key">false</span>);  <span class="cmt">//   preventing infinite recursion</span>
+  const minusResults = calculate(minus, <span class="key">false</span>);
+}</code></pre>
+        <p>Because the whole model is re-solved, the derivatives are real rather than analytic approximations. The routine then classifies each output as <em>linear</em>, <em>mildly nonlinear</em> or <em>nonlinear</em> by comparing forward against backward differences.</p>
+
+        <h3>The subtlest piece: LV reachability</h3>
+        <p>A low-voltage component is not counted simply because it is selected and enabled. The code walks outward from the DC-DC and LV battery, following only enabled LV power edges, and counts a load only if it is genuinely reachable:</p>
+<pre><code>const reachable = new Set(<span class="cmt">/* dcdc and lvBattery nodes */</span>);
+let changed = true;
+while (changed) {
+  changed = false;
+  graph.edges.filter(<span class="cmt">/* enabled LV edges between active nodes */</span>).forEach(edge =&gt; {
+    if (reachable.has(edge.fromNodeId) &amp;&amp; !reachable.has(edge.toNodeId)) {
+      reachable.add(edge.toNodeId); changed = true;
+    }
+  });
+}</code></pre>
+        <p>An orphaned load raises <em>“Active LV component X has no enabled source path”</em> rather than silently inflating the power budget.</p>
+      </section>
+
+      <!-- 06 -->
+      <section id="s6">
+        <h2><span class="n">06</span> What a keystroke actually does</h2>
+        <p>There is no virtual DOM and no reactive framework. Every single input event rebuilds the entire application.</p>
+
+        <figure>
+          <div class="fig-body">
+            <svg viewBox="0 0 860 330" role="img" aria-label="Render cycle: an input event mutates state and marks dependants stale, then renderApp recalculates, replaces all of main's innerHTML, and rebinds every listener before the next keystroke.">
+              <defs>
+                <marker id="ar3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                  <polygon points="0,0 10,5 0,10" fill="currentColor"/>
+                </marker>
+                <marker id="ar3a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                  <polygon points="0,0 10,5 0,10" fill="var(--accent)"/>
+                </marker>
+              </defs>
+
+              <rect class="svg-box-alt" x="20" y="24" width="180" height="46" rx="3"/>
+              <text class="svg-t" x="110" y="46" text-anchor="middle">user types</text>
+              <text class="svg-t-sm" x="110" y="61" text-anchor="middle">input or change event</text>
+
+              <line class="svg-line" x1="200" y1="47" x2="248" y2="47" marker-end="url(#ar3)"/>
+
+              <rect class="svg-box" x="254" y="14" width="250" height="66" rx="3"/>
+              <text class="svg-t" x="270" y="35">mutate</text>
+              <text class="svg-t-sm" x="270" y="51">set(path, value) · revision += 1</text>
+              <text class="svg-t-sm" x="270" y="66">stale = dependencies[owner]</text>
+
+              <line class="svg-line" x1="504" y1="47" x2="552" y2="47" marker-end="url(#ar3)"/>
+
+              <rect class="svg-box-accent" x="558" y="14" width="250" height="66" rx="3"/>
+              <text class="svg-t" x="574" y="35">renderApp()</text>
+              <text class="svg-t-accent" x="574" y="51">recalculate() → full solve</text>
+              <text class="svg-t-sm" x="574" y="66">persist() → localStorage</text>
+
+              <line class="svg-line" x1="683" y1="80" x2="683" y2="112" marker-end="url(#ar3)"/>
+
+              <rect class="svg-box" x="558" y="118" width="250" height="52" rx="3"/>
+              <text class="svg-t" x="574" y="140">build HTML string</text>
+              <text class="svg-t-sm" x="574" y="156">closure view + all 10 tabs</text>
+
+              <line class="svg-line" x1="683" y1="170" x2="683" y2="202" marker-end="url(#ar3)"/>
+
+              <rect class="svg-box-accent" x="558" y="208" width="250" height="52" rx="3"/>
+              <text class="svg-t" x="574" y="230">#main.innerHTML = html</text>
+              <text class="svg-t-accent" x="574" y="246">every listener is destroyed</text>
+
+              <line class="svg-line" x1="558" y1="234" x2="510" y2="234" marker-end="url(#ar3)"/>
+
+              <rect class="svg-box" x="254" y="196" width="250" height="76" rx="3"/>
+              <text class="svg-t" x="270" y="218">re-attach</text>
+              <text class="svg-t-sm" x="270" y="234">enhanceRenderedViews() · bindInputs()</text>
+              <text class="svg-t-sm" x="270" y="249">network drag · updateChrome()</text>
+              <text class="svg-t-sm" x="270" y="264">rAF → drawCharts()</text>
+
+              <path class="svg-line-accent" d="M254 234 L110 234 L110 76" marker-end="url(#ar3a)" stroke-dasharray="5 4"/>
+              <text class="svg-t-accent" x="122" y="160">ready for the</text>
+              <text class="svg-t-accent" x="122" y="174">next keystroke</text>
+
+              <line class="svg-line-soft" x1="20" y1="300" x2="840" y2="300"/>
+              <text class="svg-t-sm" x="20" y="320">All ten tab sections are rendered every pass; CSS .active decides which one is visible.</text>
+            </svg>
+          </div>
+          <figcaption>Because <code>innerHTML</code> is replaced wholesale, listeners cannot survive a cycle — which is why <code>bindInputs()</code> is called from inside <code>renderApp()</code> rather than once at startup.</figcaption>
+        </figure>
+
+        <h3>Rendering style</h3>
+        <p>Every renderer is a function returning a template literal. There is no component model:</p>
+<pre><code>function renderSteering(tab) {
+  const o = outputs.steering;
+  return `&lt;section class="view ${activeTab === tab.id ? "active" : ""}"&gt;
+    ${viewHead(tab)}
+    ${input("steering.upperOffset", "Upper offset", "mm")}
+    ${metric("Ground trail", o.groundTrail, { owner: "steering" })}
+  &lt;/section&gt;`;
+}</code></pre>
+
+        <p>Three helpers carry most of the weight:</p>
+        <ul>
+          <li><code>input(path, label, unit)</code> — emits a field wired by <code>data-path</code>, so the handler knows exactly which state key to write.</li>
+          <li><code>metric(name, item)</code> — emits a result card with both badges, resolving <code>failed</code> when the parent solver returned <code>ok: false</code> and <code>stale</code> from the stale set.</li>
+          <li><code>linkedField(path)</code> — a read-only mirror of another tab's value, labelled with its owner and source revision. Single ownership, made visible.</li>
+        </ul>
+        <p>Everything interpolated passes through <code>esc()</code>, which matters because project names and component labels are free text.</p>
+      </section>
+
+      <!-- 07 -->
+      <section id="s7">
+        <h2><span class="n">07</span> Staleness propagation</h2>
+        <p>Editing a field does not just invalidate its own tab. A <code>dependencies</code> map declares who consumes whom, and every consumer picks up a stale badge and a nav dot.</p>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th class="mono">Edit this</th><th class="mono">…and these go stale</th></tr></thead>
+            <tbody>
+              <tr><td class="mono">stance</td><td class="mono">steering, suspension, sag, powertrain, electrical, sensitivity, vehicle, battery, anti_squat</td></tr>
+              <tr><td class="mono">steering</td><td class="mono">suspension, sag, sensitivity</td></tr>
+              <tr><td class="mono">suspension</td><td class="mono">sag, anti_squat, sensitivity</td></tr>
+              <tr><td class="mono">sag</td><td class="mono">anti_squat, sensitivity, electrical</td></tr>
+              <tr><td class="mono">powertrain</td><td class="mono">vehicle, anti_squat, electrical, battery</td></tr>
+              <tr><td class="mono">electrical</td><td class="mono">stance, sag, anti_squat, vehicle, battery, sensitivity</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="note">
+          <p>Note the last row: <code>electrical → stance</code>. Component mass feeds back into the vehicle CG, so changing a battery mass correctly marks the <em>packaging</em> tab stale. The graph is a cycle, not a tree, and the code models it as one.</p>
+        </div>
+      </section>
+
+      <!-- 08 -->
+      <section id="s8">
+        <h2><span class="n">08</span> The drawing engine</h2>
+        <p>Five SVG constructions are generated from solver output — they are drawings, not illustrations. All of them share one auto-fitting transform that takes the extreme points of the construction, adds a four percent margin, and computes a <strong>uniform</strong> scale so X and Z are never distorted:</p>
+
+<pre><code>const scale = Math.min((width - 2*pad)/(xmax - xmin),
+                       (height - 2*pad)/(zmax - zmin));
+return { scale, tx: x =&gt; x0 + x*scale,
+                ty: z =&gt; z0 - z*scale };   <span class="cmt">// Z flips: +Z is up</span></code></pre>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th class="mono">Diagram</th><th>Draws</th></tr></thead>
+            <tbody>
+              <tr><td class="mono">steeringDiagram</td><td>Steering axis, fork axis, ground trail, the normal-trail perpendicular, both tyres to scale</td></tr>
+              <tr><td class="mono">suspensionDiagram</td><td>Rear swingarm at extension, mid and bump; rocker and dogbone; fork travel</td></tr>
+              <tr><td class="mono">antiSquatDiagram</td><td>Sprocket pitch circles, chain tangent, force centre, loaded CG, the 100% reference line</td></tr>
+              <tr><td class="mono">sagDiagram</td><td>Loaded chassis against the unladen reference, with pitch applied along the wheelbase</td></tr>
+              <tr><td class="mono">powertrainDiagram</td><td>Functional torque path, plus a true-scale sprocket and chain construction</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>The interactive network</h3>
+        <p>The Energy &amp; E/E view renders nodes and bezier edges that are draggable by pointer and movable by arrow key for keyboard users. Positions save under <code>architectureVariant:nodeId</code> in the <em>UI</em> key — never the engineering state. Edges dim when inactive in the current scenario, and each node subtitle carries live flow: <code>38.4 kW out</code>, <code>312 W LV</code>.</p>
+
+        <h3>Canvas charts</h3>
+        <p><code>drawCharts()</code> plots only the active tab — motion ratio against travel, anti-squat against travel, per-gear speed against RPM, and a loaded-versus-unladen geometry comparison. It scales for <code>devicePixelRatio</code> and redraws on resize.</p>
+      </section>
+
+      <!-- 09 -->
+      <section id="s9">
+        <h2><span class="n">09</span> Verification</h2>
+        <p><code>verify-core.js</code> runs under Node with a one-line shim — possible only because the core is DOM-free. It is strict in two distinct ways.</p>
+
+        <h3>Numeric fixtures pin exact values</h3>
+<pre><code>near(trail.groundTrail.value, 115.470053838, 1e-6, "Foale ground-trail fixture");
+near(defaultOutputs.antiSquat.reciprocalCheck.value, 1, 1e-9, "reciprocal identity");</code></pre>
+
+        <h3>Source-text assertions freeze past mistakes</h3>
+<pre><code>check(!/three\.js|gltf|parametric 3d/i.test(text), "excluded 3D scope");
+check(!appSource.includes('metric("Fork air pressure"'), "card must stay removed");
+check(!/front wheel sag|rear wheel sag/i.test(appSource),
+      "Sag UI must not present wheel displacement as sag");</code></pre>
+
+        <p>That last assertion is the interesting one. An earlier version reported rear <em>wheel</em> movement and called it sag. Real sag is <em>shock stroke</em>, which differs by the motion ratio. The correction is now defended three separate ways — a numeric check proving the two values differ, an interpolation check proving the linkage curve is used, and a text check preventing the old wording from ever reappearing.</p>
+
+        <div class="note">
+          <p><strong>Not confirmed:</strong> <code>node</code> is not installed on this machine, so the suite could not be executed to verify it currently passes.</p>
+        </div>
+      </section>
+
+      <!-- 10 -->
+      <section id="s10">
+        <h2><span class="n">10</span> Where to change things</h2>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>I want to…</th><th class="mono">Edit</th></tr></thead>
+            <tbody>
+              <tr><td>Change a default value</td><td class="mono">prd-data.js → defaults</td></tr>
+              <tr><td>Add or remove an electrical component</td><td class="mono">prd-data.js → componentDefaults</td></tr>
+              <tr><td>Change tab order or labels</td><td class="mono">prd-data.js → tabs <em>(also verify-core.js:37)</em></td></tr>
+              <tr><td>Fix or add physics</td><td class="mono">engineering-core.js, then surface with metric()</td></tr>
+              <tr><td>Change what a tab shows</td><td class="mono">the matching renderXxx() in app.js</td></tr>
+              <tr><td>Add a diagram</td><td class="mono">return SVG, inject via enhanceRenderedViews()</td></tr>
+              <tr><td>Change staleness propagation</td><td class="mono">dependencies map, app.js:16</td></tr>
+              <tr><td>Add a benchmark motorcycle</td><td class="mono">powertrain-benchmarks.js <em>(provenance.url required)</em></td></tr>
+              <tr><td>Add a regression guard</td><td class="mono">verify-core.js</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Conventions worth preserving</h3>
+        <ol class="body">
+          <li><strong>The core stays DOM-free.</strong> It is the single property that makes the model testable in Node.</li>
+          <li><strong>Return <code>invalid(message)</code>, never throw.</strong> The interface renders the message verbatim to the engineer.</li>
+          <li><strong>Every result goes through <code>result(value, unit, definition)</code></strong> so it carries a unit, a plain-English definition and both status badges.</li>
+          <li><strong>Escape everything</strong> with <code>esc()</code> when interpolating into HTML.</li>
+          <li><strong>Presentation state never touches the engineering revision.</strong></li>
+        </ol>
+      </section>
+
+      <footer>
+        <span>Moto Geometry · PRD v1.3 concept model</span>
+        <span>Master frame: swingarm pivot · +X forward · +Z up</span>
+        <span>Metric throughout</span>
+      </footer>
+
+    </main>
+  </div>
+</div>
+
+</body>
+</html>
