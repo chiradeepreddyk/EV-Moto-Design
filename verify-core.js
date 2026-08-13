@@ -218,6 +218,14 @@ for (const file of ["index.html", "app.js", "engineering-core.js", "prd-data.js"
 }
 const html = fs.readFileSync("index.html", "utf8");
 check(!/id="(?:electricalScenario|architectureVariant|dutyCase)"/.test(html), "Domain-specific context selectors must not remain in the global context bar");
+// Every asset must share one cache token. Bumping only the changed file leaves returning visitors
+// running a cached older script against a newer one, which presents as "the deploy did nothing".
+const assetRefs = [...html.matchAll(/(?:href|src)="([^"?]+)\?v=([^"]+)"/g)].map(match => ({ file: match[1], version: match[2] }));
+check(assetRefs.length >= 5, "Local assets must be cache-busted with a version query string");
+check(new Set(assetRefs.map(ref => ref.version)).size === 1,
+  `All cache-busting tokens must match; found ${[...new Set(assetRefs.map(ref => ref.version))].join(", ")}`);
+for (const ref of assetRefs) check(fs.existsSync(ref.file), `index.html references a missing asset: ${ref.file}`);
+check(/transmission-benchmarks\.js/.test(html), "index.html must load the transmission benchmark catalogue");
 const appSource = fs.readFileSync("app.js", "utf8");
 for (const diagram of ["steeringDiagram", "suspensionDiagram", "antiSquatDiagram", "sagDiagram", "powertrainDiagram", "electricalNetwork"]) check(appSource.includes(`function ${diagram}`), `${diagram} must remain implemented`);
 check(appSource.includes('const electricalScenarios = [["drive","Drive"],["charge","Charge"],["off","Off"]]'), "Electrical scenario selector must contain exactly Drive, Charge and Off");
