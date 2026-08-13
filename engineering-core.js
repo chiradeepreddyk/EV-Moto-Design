@@ -131,9 +131,24 @@
     const stoppieLimit = (frontX - cgX) / Math.max(1e-9, cgHeight);
     const speedMs = Number(state.steering.cornerSpeed) / 3.6;
     const idealLean = deg(Math.atan2(speedMs * speedMs, G * Math.max(1e-9, Number(state.steering.cornerRadius))));
+    // Head tube (steering) axis and fork-tube axis are only parallel when the two clamp offsets are equal.
+    // Both lines are evaluated at the handlebar-grip height so the reported C-C distance is a solved value
+    // rather than a restatement of the entered upper offset.
+    const rearTyreForGround = tyre(state.stance.rearTyreWidth, state.stance.rearTyreAspect, state.stance.rearRim);
+    const groundZ = Number(state.stance.rearAxleZ) - (rearTyreForGround.ok ? rearTyreForGround.radius : 0);
+    const frontAxle = { x: frontX, z: groundZ + wheel.radius };
+    const gripZ = Number(state.stance.gripZ);
+    const forkRakeRad = rad(rake + forkAxisDelta);
+    const gripRise = gripZ - frontAxle.z;
+    // The clamp offset places the axle ahead of the steering axis, so at axle height the steering axis
+    // sits behind the axle by offset / cos(rake). Both axes are then projected up to the grip plane.
+    const steeringAxisXAtGrip = frontAxle.x - offset / Math.cos(a) - Math.tan(a) * gripRise;
+    const forkAxisXAtGrip = frontAxle.x - Math.tan(forkRakeRad) * gripRise;
+    const headTubeToForkCC = (forkAxisXAtGrip - steeringAxisXAtGrip) * Math.cos(a);
     return {
       ok: true,
       tyre: wheel,
+      headTubeToForkCC: result(headTubeToForkCC, "mm", "Perpendicular centre-to-centre distance from the head-tube (steering) axis to the fork-tube axis, measured in the handlebar-grip plane", { note: "Equal to the upper offset only when upper and under-bracket offsets match; otherwise the axes converge and this value changes with grip height.", inputs: ["steering.upperOffset", "steering.underBracketOffset", "steering.bracketSpan", "stance.targetRake", "stance.gripZ"] }),
       groundTrail: result(groundTrail, "mm", "Ground-plane mechanical trail", { note: global.PRD_DATA?.sourceNotes.trail, inputs: ["stance.targetRake", "steering.upperOffset", "stance.frontTyre*"] }),
       normalTrail: result(normalTrail, "mm", "Perpendicular lever from steering axis to contact patch"),
       flop: result(flop, "mm", "Steering-head lowering at the entered steering angle"),
@@ -224,7 +239,6 @@
     const finalAirVolume = initialAirVolume - pistonArea * frontStroke;
     const airCompressionRatio = finalAirVolume > 0 ? initialAirVolume / finalAirVolume : null;
     const endPressureBar = airCompressionRatio;
-    const tubeId = Number(state.suspension.forkStanchion) - 2 * Number(state.suspension.forkWall);
     const springRate = Number(state.sag.rearK1);
     const startMR = points[0].motionRatio;
     const midMR = points[Math.round(endIndex / 2)]?.motionRatio;
@@ -238,7 +252,7 @@
       const trail = (frontTyre.radius * Math.sin(rad(rake)) - Number(state.steering.upperOffset)) / Math.cos(rad(rake));
       frontTravelSweep.push({ frontTravel: front, rake, trail, wheelbase: Number(state.stance.wheelbase) * Math.cos(pitch), clearance: Number(state.stance.groundClearance) - front / 2 });
     }
-    const valid = finite(averageMotionRatio, shockTravel, tubeId) && averageMotionRatio > 0 && finalAirVolume > 0;
+    const valid = finite(averageMotionRatio, shockTravel) && averageMotionRatio > 0 && finalAirVolume > 0;
     return valid ? {
       ok: true,
       points,
@@ -255,10 +269,8 @@
       wheelRateMid: result(springRate * midMR * midMR, "N/mm", "Linked rear K1 multiplied by local motion ratio squared"),
       wheelRateEnd: result(springRate * endMR * endMR, "N/mm", "Linked rear K1 multiplied by local motion ratio squared"),
       frontStrokeMargin: result(Number(state.suspension.frontWheelToMetal) - Number(state.stance.frontTravel), "mm", "Front wheel-to-metal travel minus target front travel"),
-      forkTubeId: result(tubeId, "mm", "Stanchion outside diameter minus twice the entered wall thickness"),
       forkAirCompression: result(airCompressionRatio, "ratio", "Initial fork-air volume divided by end-stroke volume"),
       forkEndPressure: result(endPressureBar, "bar abs", "Ideal isothermal fork-air pressure at usable stroke from a 1 bar absolute start"),
-      forkSealMargin: result(Number(state.suspension.frontSealPressureLimit) - endPressureBar, "bar", "Entered seal pressure screen minus ideal end pressure"),
       frontTravelSweep
     } : invalid(finalAirVolume <= 0 ? "Fork swept volume consumes the entered air volume before full stroke." : "Shock motion is zero or non-finite for the entered rear construction.");
   }
@@ -403,6 +415,47 @@
       };
     };
     const loadCases = Object.fromEntries(Object.entries(massCases).map(([name, record]) => [name, solveNamedCase(record)]));
+    // Load vs deflection at the wheel, sampled on the same force laws the equilibrium solver uses.
+    // Front is fork coil + fork air; rear is spring x motion ratio + bump stop, so both are wheel-referred
+    // and directly comparable on one pair of axes.
+    const curveSteps = 60;
+    const sampleCurve = (force, maxTravel) => Array.from({ length: curveSteps + 1 }, (_, i) => {
+      const travel = maxTravel * i / curveSteps;
+      const value = force(travel);
+      return { travel, force: Number.isFinite(value) ? value : null };
+    }).filter(point => point.force !== null);
+    const markerAt = (force, travel, label, kind) => Number.isFinite(travel) ? { travel, force: force(travel), label, kind } : null;
+    const rearTransitionWheel = (() => {
+      // The rear spring transition is defined in shock stroke; map it back to the wheel axis.
+      const target = Number(state.sag.rearTransition);
+      let low = 0, high = maxRear;
+      if (rearKinematicsAtTravel(high).shockTravel <= target) return null;
+      for (let i = 0; i < 40; i += 1) {
+        const mid = (low + high) / 2;
+        if (rearKinematicsAtTravel(mid).shockTravel >= target) high = mid; else low = mid;
+      }
+      return (low + high) / 2;
+    })();
+    const frontMarkers = [
+      markerAt(frontForce, loadCases.Kerb?.ok ? loadCases.Kerb.frontWheelDisplacement : null, "Kerb sag", "sag"),
+      markerAt(frontForce, loadCases["Solo rider"]?.ok ? loadCases["Solo rider"].frontWheelDisplacement : null, "Solo rider sag", "sag"),
+      markerAt(frontForce, loadCases["Rider + pillion"]?.ok ? loadCases["Rider + pillion"].frontWheelDisplacement : null, "Rider + pillion sag", "sag"),
+      Number(state.sag.frontTransition) < maxFront ? markerAt(frontForce, Number(state.sag.frontTransition), "Spring transition", "transition") : null,
+      markerAt(frontForce, maxFront, "Usable travel limit", "limit")
+    ].filter(item => item && Number.isFinite(item.force));
+    const rearMarkers = [
+      markerAt(rearForce, loadCases.Kerb?.ok ? loadCases.Kerb.rearWheelDisplacement : null, "Kerb sag", "sag"),
+      markerAt(rearForce, loadCases["Solo rider"]?.ok ? loadCases["Solo rider"].rearWheelDisplacement : null, "Solo rider sag", "sag"),
+      markerAt(rearForce, loadCases["Rider + pillion"]?.ok ? loadCases["Rider + pillion"].rearWheelDisplacement : null, "Rider + pillion sag", "sag"),
+      rearTransitionWheel !== null ? markerAt(rearForce, rearTransitionWheel, "Spring transition", "transition") : null,
+      Number(state.suspension.bumpStopStart) < maxRear ? markerAt(rearForce, Number(state.suspension.bumpStopStart), "Bump stop engages", "bumpstop") : null,
+      markerAt(rearForce, maxRear, "Usable travel limit", "limit")
+    ].filter(item => item && Number.isFinite(item.force));
+    const loadCurves = {
+      front: { points: sampleCurve(frontForce, maxFront), markers: frontMarkers, maxTravel: maxFront, label: "Front wheel" },
+      rear: { points: sampleCurve(rearForce, maxRear), markers: rearMarkers, maxTravel: maxRear, label: "Rear wheel" },
+      definition: "Wheel-referred supporting force against wheel deflection. Front combines fork coil and fork air; rear combines spring force through the linkage motion ratio plus the bump stop. Damping, friction, tyre compliance and chassis flexibility are not modelled."
+    };
     const expectedCaseValue = (caseName, field, member) => {
       const record = loadCases[caseName];
       return result(record?.ok ? record[field] : null, "mm", `${caseName} ${member} sag predicted from sprung load, spring force, preload and suspension kinematics`);
@@ -437,6 +490,7 @@
       loadedWheelbase: result(loadedWheelbase, "mm", "Contact spacing after quasi-static pitch"),
       loadedClearance: result(loadedClearance, "mm", "Ground clearance after average suspension displacement"),
       pitch: result(deg(pitch), "deg", "Chassis pitch caused by unequal front/rear sag"),
+      loadCurves,
       loadCases
     };
   }
@@ -777,13 +831,23 @@
   }
 
   function architectureGraph(variant, components = []) {
+    // Charge energy path: AC inlet -> EMI/AC filter -> OBC -> HV junction -> pack.
+    // The BMS is deliberately NOT in the power path. It measures cell voltage and temperature and commands
+    // the OBC's constant-current / constant-voltage setpoint over CAN, which is how the current is regulated.
     const common = {
       hv: [
-        ["AC inlet", "OBC", "AC"], ["OBC", "HV junction", "HV"], ["DC inlet", "HV junction", "HV"],
-        ["Battery", "HV junction", "HV"], ["HV junction", "Inverter", "HV"], ["Inverter", "Motor", "phase"],
-        ["HV junction", "DC-DC", "HV"]
+        ["AC inlet", "AC filter", "AC", "AC supply"], ["AC filter", "OBC", "AC", "filtered AC"],
+        ["OBC", "HV junction", "HV", "CC/CV charge current"], ["DC inlet", "HV junction", "HV", "DC charge"],
+        ["Battery", "HV junction", "HV", "pack energy"], ["HV junction", "Inverter", "HV", "traction DC"],
+        ["Inverter", "Motor", "phase", "3-phase drive"], ["HV junction", "DC-DC", "HV", "LV supply feed"]
       ],
-      control: [["BMS", "VCU / gateway", "CAN"], ["VCU / gateway", "Inverter", "CAN"], ["VCU / gateway", "Dashboard", "CAN"]]
+      control: [
+        ["Throttle", "VCU / gateway", "signal", "rider torque demand"],
+        ["BMS", "VCU / gateway", "CAN", "pack power limits"],
+        ["VCU / gateway", "Inverter", "CAN", "torque command"],
+        ["BMS", "OBC", "CAN", "CC/CV setpoint"],
+        ["VCU / gateway", "Dashboard", "CAN", "vehicle state"]
+      ]
     };
     const variants = {
       centralized_pdu: [["DC-DC", "Central PDU", "LV"], ["LV battery", "Central PDU", "LV"]],
@@ -806,20 +870,21 @@
     const lv = [...(variants[variant] || variants.dashboard_ldu), ...loadEdges];
     const control = common.control;
     const allTriples = [
-      ...hv.map(edge => ({ from: edge[0], to: edge[1], domain: edge[2], graph: "power" })),
-      ...lv.map(edge => ({ from: edge[0], to: edge[1], domain: edge[2], graph: "power" })),
-      ...control.map(edge => ({ from: edge[0], to: edge[1], domain: edge[2], graph: "communication" }))
+      ...hv.map(edge => ({ from: edge[0], to: edge[1], domain: edge[2], purpose: edge[3] || null, graph: "power" })),
+      ...lv.map(edge => ({ from: edge[0], to: edge[1], domain: edge[2], purpose: edge[3] || null, graph: "power" })),
+      ...control.map(edge => ({ from: edge[0], to: edge[1], domain: edge[2], purpose: edge[3] || null, graph: "communication" }))
     ];
     const componentMap = {
       Battery: "battery", BMS: "bms", OBC: "obc", "HV junction": "hvJunction", Inverter: "inverter", Motor: "motor",
-      "DC-DC": "dcdc", "LV battery": "lvBattery", Dashboard: "dashboard", "VCU / gateway": "vcu",
+      "AC filter": "acFilter", "DC-DC": "dcdc", "LV battery": "lvBattery", Dashboard: "dashboard", "VCU / gateway": "vcu",
       PDU: "pdu", LDU: "ldu", "Central PDU": "pdu", Lighting: "lighting", "Controllers / sensors": "controllers", "Actuators / peripherals": "actuators"
     };
-    const roleFor = label => /battery/i.test(label) ? "storage" : /inlet/i.test(label) ? "source" : /OBC|Inverter|DC-DC/.test(label) ? "converter" : /junction/i.test(label) ? "junction" : /feed|PDU|LDU|zone|bus|distribution|branches/.test(label) ? "distribution" : "load";
+    const roleFor = label => /battery/i.test(label) ? "storage" : /inlet/i.test(label) ? "source" : /throttle/i.test(label) ? "sensor" : /filter/i.test(label) ? "filter" : /OBC|Inverter|DC-DC/.test(label) ? "converter" : /junction/i.test(label) ? "junction" : /feed|PDU|LDU|zone|bus|distribution|branches/.test(label) ? "distribution" : "load";
     const macroStatesFor = (from, to, graphName) => {
-      if (graphName === "communication") return "drive,charge";
-      if (/AC inlet|DC inlet|OBC/.test(`${from}|${to}`)) return "charge";
-      if (/Inverter|Motor/.test(`${from}|${to}`)) return "drive";
+      const pair = `${from}|${to}`;
+      if (graphName === "communication") return /Throttle/.test(pair) ? "drive" : /OBC/.test(pair) ? "charge" : "drive,charge";
+      if (/AC inlet|AC filter|DC inlet|OBC/.test(pair)) return "charge";
+      if (/Inverter|Motor/.test(pair)) return "drive";
       return "drive,charge";
     };
     const labels = [...new Set(allTriples.flatMap(edge => [edge.from, edge.to]))];
@@ -829,7 +894,8 @@
       role: roleFor(label),
       componentInstanceId: componentMap[label] || null,
       logicalNode: !componentMap[label],
-      enabledStates: components.find(component => component.id === componentMap[label])?.states || (label === "AC inlet" || label === "DC inlet" ? "charge" : "drive,charge")
+      enabledStates: components.find(component => component.id === componentMap[label])?.states
+        || (label === "AC inlet" || label === "DC inlet" ? "charge" : label === "Throttle" ? "drive" : "drive,charge")
     }));
     const nodeId = label => nodes.find(node => node.label === label)?.id;
     const edges = allTriples.map((edge, index) => ({
@@ -837,6 +903,7 @@
       fromNodeId: nodeId(edge.from),
       toNodeId: nodeId(edge.to),
       voltageDomain: edge.domain,
+      purpose: edge.purpose,
       graph: edge.graph,
       direction: edge.graph === "communication" ? "bidirectional" : "forward",
       enabledStates: macroStatesFor(edge.from, edge.to, edge.graph),
@@ -862,7 +929,7 @@
     const selectedComponentIds = new Set(state.components.map(item => item.id));
     for (const node of graph?.nodes || []) {
       if (node.componentInstanceId && !selectedComponentIds.has(node.componentInstanceId)) issues.push(`Physical graph node ${node.label} has no selected component instance.`);
-      if (!["source","storage","converter","junction","distribution","load"].includes(node.role)) issues.push(`Power node ${node.label} has unsupported role ${node.role}.`);
+      if (!["source","storage","converter","junction","distribution","load","filter","sensor"].includes(node.role)) issues.push(`Power node ${node.label} has unsupported role ${node.role}.`);
     }
     const enabledForScenario = item => String(item.enabledStates || "").split(",").map(value => value.trim()).includes(scenario);
     const activeNodeIds = new Set(graph.nodes.filter(node => enabledForScenario(node) && (!node.componentInstanceId || activeIds.has(node.componentInstanceId))).map(node => node.id));
@@ -890,7 +957,14 @@
     const chargeEfficiency = Number(b.chargeEfficiency);
     const valid = Number(b.targetRange) > 0 && Number(b.consumption) > 0 && Number(b.reserve) >= 0 && socWindow > 0 && dischargeEfficiency > 0 && dischargeEfficiency <= 1 && chargeEfficiency > 0 && chargeEfficiency <= 1 && Number(b.capacityDerate) > 0 && Number(b.capacityDerate) <= 1;
     if (!valid) return invalid("Battery study requires positive range/consumption, non-negative reserve, a valid SOC window, and efficiencies/derate in (0, 1].");
-    const requiredLoadEnergy = Number(b.targetRange) * Number(b.consumption) / 1000;
+    // LV demand solved by Energy & E/E is a real battery-sizing input, not a display figure.
+    // Continuous LV load adds energy over the target range; peak LV load adds to the current the pack must supply.
+    const tractionLoadEnergy = Number(b.targetRange) * Number(b.consumption) / 1000;
+    const lvContinuousKw = Number(electricalResult.lvContinuous?.value || 0) / 1000;
+    const lvPeakKw = Number(electricalResult.lvPeak?.value || 0) / 1000;
+    const rangeHours = Number(b.averageSpeed) > 0 ? Number(b.targetRange) / Number(b.averageSpeed) : 0;
+    const lvEnergyOverRange = lvContinuousKw * rangeHours;
+    const requiredLoadEnergy = tractionLoadEnergy + lvEnergyOverRange;
     const requiredDelivered = requiredLoadEnergy * (1 + Number(b.reserve) / 100);
     const requiredNominal = requiredDelivered / (socWindow * dischargeEfficiency * Number(b.capacityDerate));
     const deliveredEnergy = electricalResult.pack.usableEnergyKWh * dischargeEfficiency * Number(b.capacityDerate);
@@ -898,7 +972,7 @@
     const requiredSeries = Math.ceil(Number(b.studyVoltage) / Number(state.electrical.cellNomV));
     const stringEnergy = requiredSeries * Number(e.cellNomV) * Number(e.cellAh) / 1000;
     const requiredParallelEnergy = Math.ceil(requiredNominal / Math.max(1e-9, stringEnergy));
-    const requiredCurrent = Number(b.runtimePower) * 1000 / Math.max(1e-9, Number(b.studyVoltage));
+    const requiredCurrent = (Number(b.runtimePower) + lvPeakKw) * 1000 / Math.max(1e-9, Number(b.studyVoltage));
     const cellCurrentLimit = Number(e.cellAh) * Number(e.dischargeCLimit);
     const requiredParallelCurrent = Math.ceil(requiredCurrent / Math.max(1e-9, cellCurrentLimit));
     const requiredParallelAh = Math.ceil(Number(b.studyCapacityAh) / Number(e.cellAh));
@@ -924,7 +998,11 @@
     const permittedPower = electricalResult.pack.nominalV * electricalResult.pack.dischargeLimitA / 1000;
     return {
       ok: true,
-      requiredLoadEnergy: result(requiredLoadEnergy, "kWh", "Target range multiplied by named energy consumption"),
+      tractionLoadEnergy: result(tractionLoadEnergy, "kWh", "Target range multiplied by named traction energy consumption; LV auxiliaries excluded"),
+      lvContinuousDemand: result(lvContinuousKw, "kW", "Continuous LV demand solved by Energy & E/E for the active scenario, carried into battery sizing"),
+      lvPeakDemand: result(lvPeakKw, "kW", "Peak / inrush LV demand solved by Energy & E/E, added to the pack current-capability requirement"),
+      lvEnergyOverRange: result(lvEnergyOverRange, "kWh", "Continuous LV demand multiplied by target range divided by entered average speed"),
+      requiredLoadEnergy: result(requiredLoadEnergy, "kWh", "Traction energy over the target range plus LV auxiliary energy for the same duration"),
       requiredUsable: result(requiredDelivered, "kWh", "Load energy increased by the entered reserve"),
       requiredNominal: result(requiredNominal, "kWh", "Required gross energy after SOC window, discharge efficiency and capacity derate"),
       deliveredEnergy: result(deliveredEnergy, "kWh", "Committed usable energy after discharge efficiency and capacity derate"),

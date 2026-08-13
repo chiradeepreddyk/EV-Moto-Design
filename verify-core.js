@@ -110,11 +110,31 @@ check(defaultGraph.nodes.some(node => node.componentInstanceId === "dcdc"), "Ele
 check(defaultGraph.nodes.some(node => node.componentInstanceId === "lvBattery"), "Electrical graph must represent the LV backup battery as an independent physical node");
 check(defaultGraph.edges.some(edge => edge.fromNodeId === "dc_dc" && edge.toNodeId === "pdu"), "Dashboard/LDU template must connect the DC-DC to the PDU");
 check(defaultGraph.edges.some(edge => edge.fromNodeId === "lv_battery" && edge.toNodeId === "pdu"), "Dashboard/LDU template must connect the LV backup battery to the PDU");
-check(defaultGraph.edges.filter(edge => edge.graph === "communication").every(edge => edge.voltageDomain === "CAN"), "Communications must remain separate from electrical power edges");
+check(defaultGraph.edges.filter(edge => edge.graph === "communication").every(edge => ["CAN", "signal"].includes(edge.voltageDomain)), "Communications must remain separate from electrical power edges");
 check(defaultGraph.edges.filter(edge => edge.graph === "communication").every(edge => ![edge.fromNodeId, edge.toNodeId].includes("motor")), "Motor phase hardware must not be inferred as a CAN node");
-check(defaultGraph.nodes.every(node => ["source","storage","converter","junction","distribution","load"].includes(node.role)), "Power nodes must use the PRD role vocabulary");
+check(defaultGraph.nodes.every(node => ["source","storage","converter","junction","distribution","load","filter","sensor"].includes(node.role)), "Power nodes must use the PRD role vocabulary");
 check(defaultOutputs.electrical.lvContinuous.value > 0, "Default drive scenario must reach configured active LV loads through the selected topology");
 check(defaultGraph.edges.every(edge => ["drive","charge"].some(scenario => edge.enabledStates.split(",").includes(scenario))), "Every functional edge must declare one of the three supported macro scenarios");
+
+// --- Charge path: AC inlet -> filter -> OBC -> HV junction -> pack, with the BMS commanding rather than conducting.
+const edgeBetween = (from, to) => defaultGraph.edges.some(edge => edge.fromNodeId === from && edge.toNodeId === to);
+check(edgeBetween("ac_inlet", "ac_filter") && edgeBetween("ac_filter", "obc"), "AC charge energy must be filtered between the inlet and the OBC");
+check(edgeBetween("obc", "hv_junction"), "OBC output must reach the pack through the HV junction");
+check(!defaultGraph.edges.some(edge => edge.graph === "power" && edge.voltageDomain !== "LV" && [edge.fromNodeId, edge.toNodeId].includes("bms")),
+  "BMS must never carry HV or AC charge current; it regulates by commanding the OBC");
+check(defaultGraph.edges.some(edge => edge.graph === "communication" && edge.fromNodeId === "bms" && edge.toNodeId === "obc" && /CC\/CV/.test(edge.purpose || "")),
+  "BMS must command the OBC constant-current / constant-voltage setpoint over the control graph");
+check(defaultGraph.edges.some(edge => edge.graph === "communication" && edge.fromNodeId === "throttle" && edge.toNodeId === "vcu_gateway"),
+  "Rider throttle demand must enter the control graph at the vehicle controller");
+check(defaultGraph.edges.some(edge => edge.graph === "communication" && edge.fromNodeId === "bms" && edge.toNodeId === "vcu_gateway"),
+  "BMS must publish pack power limits to the vehicle controller");
+check(defaultGraph.edges.filter(edge => edge.graph === "power" && edge.voltageDomain !== "LV").every(edge => edge.toNodeId !== "throttle" && edge.fromNodeId !== "throttle"),
+  "Throttle must remain a control-graph sensor and never a power node");
+// --- LV distribution: step down at the DC-DC, distribute at the PDU, then dashboard and LDU-fed peripherals.
+check(edgeBetween("dc_dc", "pdu") && edgeBetween("pdu", "dashboard") && edgeBetween("pdu", "ldu"),
+  "Default LV topology must step down at the DC-DC and distribute through the PDU to the dashboard and LDU");
+check(["lighting", "controllers_sensors", "actuators_peripherals"].every(id => edgeBetween("ldu", id)),
+  "LDU must feed the configured lamps, controllers and peripheral loads");
 
 for (const variant of ["centralized_pdu", "dashboard_ldu", "front_rear_zonal", "distributed_smart_loads", "redundant_critical_loads"]) {
   const variantState = fixture();
@@ -122,6 +142,70 @@ for (const variant of ["centralized_pdu", "dashboard_ldu", "front_rear_zonal", "
   const variantOutput = EngineeringCore.calculate(variantState).electrical;
   check(variantOutput.ok === true && variantOutput.graphIssues.length === 0, `Architecture template ${variant} must expand to a valid editable graph`);
 }
+
+// --- Steering: head tube to fork centre-to-centre distance.
+check(Number.isFinite(defaultOutputs.steering.headTubeToForkCC.value), "Head tube to fork C-C distance must be finite");
+const parallelClampState = fixture();
+parallelClampState.steering.underBracketOffset = parallelClampState.steering.upperOffset;
+const parallelClamp = EngineeringCore.steering(parallelClampState);
+near(parallelClamp.headTubeToForkCC.value, parallelClampState.steering.upperOffset, 1e-9,
+  "Parallel clamp axes must place the fork axis exactly the upper offset from the steering axis");
+const raisedGripState = JSON.parse(JSON.stringify(parallelClampState));
+raisedGripState.stance.gripZ = Number(raisedGripState.stance.gripZ) + 250;
+near(EngineeringCore.steering(raisedGripState).headTubeToForkCC.value, parallelClamp.headTubeToForkCC.value, 1e-9,
+  "Parallel clamp C-C distance must not vary with the measurement height");
+check(Math.abs(defaultOutputs.steering.headTubeToForkCC.value - defaultState.steering.upperOffset) > 1e-6,
+  "Unequal clamp offsets must converge the axes so C-C is a solved value, not the entered upper offset");
+
+// --- Suspension: retired fork screens must stay retired.
+check(!("forkTubeId" in defaultOutputs.suspension) && !("forkSealMargin" in defaultOutputs.suspension),
+  "Suspension outputs must omit fork tube ID and seal pressure margin");
+check(!("forkWall" in PRD_DATA.defaults.suspension) && !("forkOilVolume" in PRD_DATA.defaults.suspension) && !("frontSealPressureLimit" in PRD_DATA.defaults.suspension),
+  "Stanchion wall, fork oil volume and seal pressure screen must be removed from the contract defaults");
+
+// --- Suspension: wheel-referred load vs deflection curves.
+const curves = defaultOutputs.sag.loadCurves;
+check(curves?.front?.points?.length > 1 && curves?.rear?.points?.length > 1, "Load vs deflection curves must be sampled for both wheels");
+for (const side of ["front", "rear"]) {
+  const curve = curves[side];
+  check(curve.points.every(point => Number.isFinite(point.travel) && Number.isFinite(point.force)), `${side} load curve must be finite throughout`);
+  check(curve.points.every((point, index) => index === 0 || point.force >= curve.points[index - 1].force - 1e-9), `${side} load curve must rise monotonically with deflection`);
+  near(curve.points.at(-1).travel, curve.maxTravel, 1e-9, `${side} load curve must span the full usable travel`);
+  check(curve.markers.every(marker => marker.travel >= 0 && marker.travel <= curve.maxTravel + 1e-9), `${side} curve markers must lie inside the travel domain`);
+}
+const kerbFrontMarker = curves.front.markers.find(marker => marker.label === "Kerb sag");
+near(kerbFrontMarker.travel, defaultOutputs.sag.loadCases.Kerb.frontWheelDisplacement, 1e-9,
+  "Front kerb marker must sit at the solved kerb equilibrium");
+const riderRearMarker = curves.rear.markers.find(marker => marker.label === "Solo rider sag");
+near(riderRearMarker.travel, defaultOutputs.sag.loadCases["Solo rider"].rearWheelDisplacement, 1e-9,
+  "Rear rider marker must sit at the solved rider equilibrium");
+
+// --- Battery: LV demand is a sizing input, not a display figure.
+near(defaultOutputs.battery.requiredLoadEnergy.value,
+  defaultOutputs.battery.tractionLoadEnergy.value + defaultOutputs.battery.lvEnergyOverRange.value, 1e-9,
+  "Required load energy must be traction energy plus LV auxiliary energy");
+near(defaultOutputs.battery.lvContinuousDemand.value, defaultOutputs.electrical.lvContinuous.value / 1000, 1e-9,
+  "Battery sizing must consume the LV continuous demand solved by Energy and E/E");
+near(defaultOutputs.battery.lvPeakDemand.value, defaultOutputs.electrical.lvPeak.value / 1000, 1e-9,
+  "Battery sizing must consume the LV peak demand solved by Energy and E/E");
+check(defaultOutputs.battery.lvEnergyOverRange.value > 0, "Default drive scenario must contribute non-zero LV energy to pack sizing");
+const noLoadState = fixture();
+noLoadState.meta.electricalScenario = "off";
+const noLoadBattery = EngineeringCore.calculate(noLoadState).battery;
+near(noLoadBattery.requiredLoadEnergy.value, noLoadBattery.tractionLoadEnergy.value, 1e-9,
+  "With no LV demand the sizing must reduce exactly to the traction-only case");
+
+// --- Curated transmission benchmark catalogue.
+require("./transmission-benchmarks.js");
+const transmissions = global.TRANSMISSION_BENCHMARKS;
+check(Array.isArray(transmissions.records) && transmissions.records.length >= 30, "Transmission benchmark catalogue must carry a usable comparison set");
+check(["Sport", "Naked", "Adventure", "Touring", "Cruiser"].every(category => transmissions.records.some(record => record.benchmarkCategory === category)),
+  "Transmission benchmarks must span every declared cohort");
+check(transmissions.records.every(record => Array.isArray(record.gearRatios) && record.gearRatios.length >= 3 && record.gearRatios.every(ratio => ratio > 0)),
+  "Every transmission benchmark must publish a positive gear-ratio stack");
+check(transmissions.records.every(record => record.primaryRatio > 0 && record.finalRatio > 0 && record.maxRpm > 0 && record.tyre?.nominalCircumferenceMm > 0),
+  "Every transmission benchmark must carry primary, final, max RPM and tyre circumference for the RPM comparison");
+check(transmissions.records.every(record => record.sourceCategory && record.id && record.label), "Transmission benchmarks must retain upstream identity and category for audit");
 
 const expectedCurrentRuntime = defaultOutputs.electrical.pack.capacityAh *
   ((defaultState.electrical.socMax - defaultState.electrical.socMin) / 100) *

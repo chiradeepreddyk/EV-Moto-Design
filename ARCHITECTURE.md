@@ -37,7 +37,7 @@ they can never create a pass, and a disclaimer notice on nearly every panel.
 
 ## 2. File layout
 
-### Loaded by the application (the live app is only these 4 scripts + HTML + CSS)
+### Loaded by the application (the live app is only these 5 scripts + HTML + CSS)
 
 | File | Size | Role | Global it publishes |
 | --- | --- | --- | --- |
@@ -45,6 +45,7 @@ they can never create a pass, and a disclaimer notice on nearly every panel.
 | `styles.css` | 15 KB | Responsive layout, badge/status colours | — |
 | `prd-data.js` | 12 KB | Tab order, every default value, component catalogue, source notes | `window.PRD_DATA` |
 | `powertrain-benchmarks.js` | 4 KB | 5 frozen reference motorcycles with provenance URLs | `window.POWERTRAIN_BENCHMARKS` |
+| `transmission-benchmarks.js` | 19 KB | 39 curated reference gearboxes for the Powertrain comparison | `window.TRANSMISSION_BENCHMARKS` |
 | `engineering-core.js` | 78 KB | **All physics.** Pure functions, zero DOM access | `window.EngineeringCore` |
 | `app.js` | 120 KB | State, persistence, rendering, SVG, canvas, events | *(IIFE, no export)* |
 
@@ -63,7 +64,7 @@ current HTML. They are leftovers from an earlier version of the application.
 
 | File | Size | Note |
 | --- | --- | --- |
-| `gearing-commander-dataset.js` | 1.8 MB | 2,037 scraped motorcycle gearing records. The live benchmark feature uses the 5-record `powertrain-benchmarks.js` instead, so this entire dataset is stranded. |
+| `gearing-commander-dataset.js` | 1.8 MB | 2,037 scraped motorcycle gearing records. `transmission-benchmarks.js` was extracted from it, so it now serves only as the archive that extract came from — the running app never loads it. |
 | `electrical-architecture.js` | 38 KB | Older standalone electrical calculator with its own preset system |
 | `engineering-calculators.js` | 28 KB | Older standalone calculator page |
 
@@ -431,7 +432,8 @@ wording from reappearing.
 | Change what a tab shows | the matching `renderXxx()` in `app.js` |
 | Add a diagram | write a function returning SVG, inject via `enhanceRenderedViews()` |
 | Change staleness propagation | `dependencies` map, `app.js:16` |
-| Add a benchmark motorcycle | `powertrain-benchmarks.js` — `provenance.url` is mandatory |
+| Add a power/torque benchmark | `powertrain-benchmarks.js` — `provenance.url` is mandatory |
+| Add a transmission reference | `transmission-benchmarks.js` — needs full `gearRatios`, `primaryRatio`, `finalRatio`, `maxRpm`, `tyre` |
 | Add a regression guard | `verify-core.js` |
 
 ### Conventions worth preserving

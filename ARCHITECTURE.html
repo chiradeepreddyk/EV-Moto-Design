@@ -357,7 +357,7 @@
     </div>
     <dl class="titleblock-meta">
       <div class="tb-cell"><dt>Contract</dt><dd>PRD v1.3</dd></div>
-      <div class="tb-cell"><dt>Live scripts</dt><dd>4</dd></div>
+      <div class="tb-cell"><dt>Live scripts</dt><dd>5</dd></div>
       <div class="tb-cell"><dt>Solver lines</dt><dd>1,040</dd></div>
       <div class="tb-cell"><dt>Dependencies</dt><dd>None</dd></div>
       <div class="tb-cell"><dt>Build step</dt><dd>None</dd></div>
@@ -423,6 +423,7 @@
               <tr><td class="mono">styles.css</td><td class="num">15 KB</td><td>Layout, badge and status colours</td><td><span class="tag live">Live</span></td></tr>
               <tr><td class="mono">prd-data.js</td><td class="num">12 KB</td><td>Tab order, every default, component catalogue → <code>PRD_DATA</code></td><td><span class="tag live">Live</span></td></tr>
               <tr><td class="mono">powertrain-benchmarks.js</td><td class="num">4 KB</td><td>Five frozen reference bikes with provenance URLs</td><td><span class="tag live">Live</span></td></tr>
+              <tr><td class="mono">transmission-benchmarks.js</td><td class="num">19 KB</td><td>39 curated reference gearboxes driving the Powertrain comparison charts</td><td><span class="tag live">Live</span></td></tr>
               <tr><td class="mono">engineering-core.js</td><td class="num">78 KB</td><td><strong>All physics.</strong> Pure functions, zero DOM access</td><td><span class="tag live">Live</span></td></tr>
               <tr><td class="mono">app.js</td><td class="num">120 KB</td><td>State, persistence, rendering, SVG, canvas, events</td><td><span class="tag live">Live</span></td></tr>
               <tr><td class="mono">verify-core.js</td><td class="num">12 KB</td><td>Node regression suite — <code>node verify-core.js</code></td><td><span class="tag test">Test</span></td></tr>
@@ -441,7 +442,7 @@
           </div>
           <div class="card">
             <h4>The stranded dataset</h4>
-            <p>The live benchmark feature reads the five-record <code>powertrain-benchmarks.js</code>. The 2,037-record scrape is never consulted.</p>
+            <p><code>transmission-benchmarks.js</code> was extracted from the 2,037-record scrape, which now serves only as the archive that extract came from. The running app never loads it.</p>
           </div>
           <div class="card">
             <h4>The missing contract</h4>
@@ -880,7 +881,8 @@ check(!/front wheel sag|rear wheel sag/i.test(appSource),
               <tr><td>Change what a tab shows</td><td class="mono">the matching renderXxx() in app.js</td></tr>
               <tr><td>Add a diagram</td><td class="mono">return SVG, inject via enhanceRenderedViews()</td></tr>
               <tr><td>Change staleness propagation</td><td class="mono">dependencies map, app.js:16</td></tr>
-              <tr><td>Add a benchmark motorcycle</td><td class="mono">powertrain-benchmarks.js <em>(provenance.url required)</em></td></tr>
+              <tr><td>Add a power/torque benchmark</td><td class="mono">powertrain-benchmarks.js <em>(provenance.url required)</em></td></tr>
+              <tr><td>Add a transmission reference</td><td class="mono">transmission-benchmarks.js <em>(needs full ratio stack + tyre)</em></td></tr>
               <tr><td>Add a regression guard</td><td class="mono">verify-core.js</td></tr>
             </tbody>
           </table>
