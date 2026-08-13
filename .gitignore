@@ -1,3 +1,6 @@
 __pycache__/
 *.pyc
 .~lock.*#
+
+# Sibling project cloned for reference; must never be committed into this site
+adaptstance/
