@@ -205,7 +205,9 @@ current**.
 | `componentMassProperties` | Mass-weighted CG over glider + rider + pillion + luggage + all 15 electrical components; static beam solve for axle loads. Rejects a CG outside the wheelbase |
 | `sag` | 64-iteration bisection (`solveSagForce`) finds where dual-rate spring force equals sprung load, front and rear. Rear shock stroke is **interpolated from the linkage curve**, not aliased to wheel travel |
 | `antiSquat` | Upper chain tangent between sprocket pitch circles → intersect with the swingarm line → force centre → Foale anti-squat %, cross-checked against the Cossalter reciprocal |
-| `gearing` | Overall ratios, per-gear speed/torque curves (41 points each), sprocket pitch radii, ideal chain link count, named duty point |
+| `gearing` | Transmission tab. 1–6 gear ratio stack, overall ratios, per-gear speed/torque curves, cruise RPM. Final drive on the real hardpoints: ISO 606 open-chain length, even link count chosen inside the axle-adjuster window, closed-form centre distance for that count, axle move, sprocket pitch/outside/root diameters, wrap angle, peak chain tension and safety factor, chain speed, wear recurrence. Also the ±3-tooth sprocket matrix and a current-vs-proposed sprocket comparison. Chains and toothed belts (8M/14M) share one code path |
+| `motorSizing` | Motor sizing tab. Max RPM from top speed in the tallest ratio, base RPM from the constant-power speed ratio, then one minimum peak torque per target (top speed, grade at speed, 0–60, 0–100). Acceleration targets are bisected over an explicit-Euler run with instant best-gear selection and an optional wheelie cap. The same runs score the committed motor. Ratios come linked from `gearing` or as one manual overall ratio |
+| `braking` | Braking tab. Solo and Rider + pillion cases from live mass properties. Rigid-body load transfer, front-only / rear-only / combined adhesion limits (capped at the stoppie threshold), homologation-form stopping distance, brake torque at the adhesion limit, clamp force, line pressure and lever/pedal effort. Reproduces the KTM 390 sheet |
 | `vehicleStudy` | First-order road load: rolling + aero + grade → required power and shaft torque |
 | `electrical` | Pack S/P model, quadratic constant-Voc discharge solve, **breadth-first reachability over the LV graph** so a component only counts if it has a live source path, DC-DC headroom, cable drop, precharge RC |
 | `batteryStudy` | Required energy → proposed S/P pack, AC supply limits, charge time with taper, two runtime models |
@@ -298,13 +300,15 @@ Editing a field does not just invalidate that tab. The `dependencies` map (`app.
 declares who consumes whom:
 
 ```js
-stance      → steering, suspension, sag, powertrain, electrical, sensitivity,
-              vehicle_calculators, battery_calculators, anti_squat
+stance      → steering, suspension, sag, powertrain, motor_sizing, braking, electrical,
+              sensitivity, vehicle_calculators, battery_calculators, anti_squat
 steering    → suspension, sag, sensitivity
 suspension  → sag, anti_squat, sensitivity
 sag         → anti_squat, sensitivity, electrical
-powertrain  → vehicle_calculators, anti_squat, electrical, battery_calculators
-electrical  → stance, sag, anti_squat, vehicle_calculators, battery_calculators, sensitivity
+powertrain  → motor_sizing, vehicle_calculators, anti_squat, electrical, battery_calculators
+electrical  → stance, sag, anti_squat, motor_sizing, braking, vehicle_calculators,
+              battery_calculators, sensitivity
+vehicle     → motor_sizing          (CdA, Crr and air density are linked into sizing)
 ```
 
 Downstream tabs get a `stale` badge and a nav dot. Note `electrical → stance`: component
@@ -340,9 +344,10 @@ component labels are free text.
 ### The `enhanceRenderedViews()` post-pass
 
 Rather than complicate each renderer, `enhanceRenderedViews()` (`app.js:608`) runs after
-`innerHTML` is set and injects diagrams, the benchmark table, duty-case controls and extra
-metrics into the already-rendered DOM. It is a deliberate seam that keeps the base
-renderers readable.
+`innerHTML` is set and injects diagrams and context controls into the already-rendered DOM.
+Transmission, Motor sizing and Braking no longer use it: they render their whole layout
+directly, with compact KPI tiles (`kpi`, `kpiStrip`), linked-value lists (`linkedList`) and
+standard-value dropdowns with a Custom escape hatch (`stdField`).
 
 ---
 
@@ -381,6 +386,15 @@ shows live power flow (`38.4 kW out`, `312 W LV`).
 per-gear speed vs RPM, and a loaded-vs-unladen geometry bar comparison. It handles
 `devicePixelRatio` for retina sharpness and redraws on resize.
 
+The newer tabs use `xyChart()`, a small multi-series engine with nice-number ticks on both
+axes, an optional right-hand axis, dashed series, reference lines and labelled points:
+
+- **Motor sizing** — torque & power vs RPM (dual axis), wheel torque vs speed per gear with
+  road load, wheel power vs speed, speed vs time against the targets, torque vs power.
+- **Braking** — ideal front/rear force distribution with front-lock, rear-lock and
+  iso-deceleration lines, lever/pedal effort vs deceleration, line pressure vs
+  deceleration, stopping distance vs speed.
+
 ---
 
 ## 8. Verification
@@ -416,8 +430,10 @@ is now defended by three separate assertions — a numeric one proving the value
 interpolation one proving the linkage curve is used, and a text one preventing the old
 wording from reappearing.
 
-> **Note:** `node` is not installed on this machine, so the suite could not be executed to
-> confirm it currently passes.
+Two spreadsheets are frozen as fixtures: the Ather acceleration time-step sheet
+(velocity at 1.6 s and 4.0 s) and the KTM 390 braking sheet (dynamic loads, adhesion,
+stopping distance, piston area, line pressure, lever and pedal effort, to 0.1 %; the sheet
+uses g = 9.81 and π = 3.142).
 
 ---
 
@@ -427,7 +443,8 @@ wording from reappearing.
 | --- | --- |
 | Change a default value | `prd-data.js` → `defaults` |
 | Add/remove an electrical component | `prd-data.js` → `componentDefaults` |
-| Change tab order or labels | `prd-data.js` → `tabs` *(also update `verify-core.js:37`)* |
+| Change tab order or labels | `prd-data.js` → `tabs` *(also update `canonicalTabs` in `verify-core.js`)* |
+| Add a chain/belt size or brake catalogue value | `prd-data.js` → `finalDriveCatalogue` / `brakeCatalogue` |
 | Fix or add physics | `engineering-core.js` — add to the returned object, then surface with `metric()` |
 | Change what a tab shows | the matching `renderXxx()` in `app.js` |
 | Add a diagram | write a function returning SVG, inject via `enhanceRenderedViews()` |

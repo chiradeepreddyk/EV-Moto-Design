@@ -8,10 +8,12 @@
     { id: "anti_squat", ordinal: 4, label: "Anti-squat", purpose: "Evaluate the drive-force line and swingarm relationship through rear travel using linked chassis and final-drive data." },
     { id: "sensitivity", ordinal: 5, label: "Sensitivity & tuning", purpose: "Quantify local and swept response to dimensions, hardpoints, adjustments and tolerances without overwriting the baseline." },
     { id: "sag", ordinal: 6, label: "Sag & outputs", purpose: "Define spring models and load cases, solve quasi-static sag and publish loaded vehicle geometry." },
-    { id: "powertrain", ordinal: 7, label: "Powertrain", purpose: "Own the torque-speed definition, ratio stack, final-drive geometry and kinematic wheel performance." },
-    { id: "vehicle_calculators", ordinal: 8, label: "Vehicle calculators", purpose: "Run transparent, reversible speed, RPM, torque, power, tractive-force and power-to-weight studies." },
-    { id: "battery_calculators", ordinal: 9, label: "Battery calculators", purpose: "Explore capacity, range, topology, charge time, discharge duration, C-rate and charger proposals." },
-    { id: "electrical", ordinal: 10, label: "Energy & E/E Integration", purpose: "Close electrical component selection, topology, state power, mass, CG and package with the mechanical configuration." }
+    { id: "braking", ordinal: 7, label: "Braking", purpose: "Size front and rear brake hardware against linked axle loads and CG height: adhesion limits, stopping distance, clamp force, line pressure and lever effort." },
+    { id: "powertrain", ordinal: 8, label: "Transmission", purpose: "Own the ratio stack, sprockets and chain: overall ratios, road speed, chain length and links for the real hardpoints, sprocket sizes and chain loading." },
+    { id: "motor_sizing", ordinal: 9, label: "Motor sizing", purpose: "Back-solve the motor torque, power and speed needed for the performance targets through the linked or manual ratio, and own the committed motor envelope." },
+    { id: "vehicle_calculators", ordinal: 10, label: "Vehicle calculators", purpose: "Run transparent, reversible speed, RPM, torque, power, tractive-force and power-to-weight studies." },
+    { id: "battery_calculators", ordinal: 11, label: "Battery calculators", purpose: "Explore capacity, range, topology, charge time, discharge duration, C-rate and charger proposals." },
+    { id: "electrical", ordinal: 12, label: "Energy & E/E Integration", purpose: "Close electrical component selection, topology, state power, mass, CG and package with the mechanical configuration." }
   ];
 
   const defaults = {
@@ -25,7 +27,7 @@
       dutyCase: "Road duty",
       electricalScenario: "drive",
       architectureVariant: "dashboard_ldu",
-      domainRevisions: { stance: 1, steering: 1, suspension: 1, antiSquat: 1, sensitivity: 1, sag: 1, powertrain: 1, vehicle: 1, battery: 1, electrical: 1 }
+      domainRevisions: { stance: 1, steering: 1, suspension: 1, antiSquat: 1, sensitivity: 1, sag: 1, powertrain: 1, motor: 1, braking: 1, vehicle: 1, battery: 1, electrical: 1 }
     },
     stance: {
       vehicleCategory: "Naked",
@@ -146,6 +148,7 @@
       baseRpm: 4500,
       maxRpm: 10000,
       primaryRatio: 1,
+      gearCount: 6,
       gear1: 2.5,
       gear2: 1.85,
       gear3: 1.45,
@@ -154,7 +157,15 @@
       gear6: 0.9,
       frontTeeth: 15,
       rearTeeth: 45,
+      chainSize: "520",
       chainPitch: 15.875,
+      chainRollerDia: 10.16,
+      chainBreakingLoad: 31,
+      axleAdjustForward: 15,
+      axleAdjustRearward: 15,
+      cruiseSpeed: 80,
+      proposedFrontTeeth: 14,
+      proposedRearTeeth: 45,
       driveSprocketX: 75,
       driveSprocketZ: 0,
       drivelineEfficiency: 0.94,
@@ -165,6 +176,42 @@
       motorEfficiency: 0.93,
       inverterEfficiency: 0.97,
       provenance: "Project assumption"
+    },
+    motor: {
+      ratioSource: "linked",
+      manualRatio: 9.91,
+      targetTopSpeed: 130,
+      gradePercent: 20,
+      gradeSpeed: 25,
+      target0to60: 4.5,
+      target0to100: 9,
+      constantPowerRatio: 2.5,
+      inertiaFactor: 1.05,
+      wheelieCap: "yes"
+    },
+    braking: {
+      roadFriction: 0.9,
+      targetDecel: 0.9,
+      testSpeed: 60,
+      freeRunCoefficient: 0.1,
+      frontLeverRatio: 5.53,
+      frontMcBore: 13,
+      frontPistonDia: "28",
+      frontPistonCount: 4,
+      frontArchitecture: "fixed_radial",
+      frontPadFriction: 0.6,
+      frontDiscOd: 320,
+      frontPadHeight: 27.75,
+      frontHydraulicEfficiency: 0.9,
+      rearLeverRatio: 3.46,
+      rearMcBore: 13,
+      rearPistonDia: "34",
+      rearPistonCount: 1,
+      rearArchitecture: "floating",
+      rearPadFriction: 0.395,
+      rearDiscOd: 240,
+      rearPadHeight: 28,
+      rearHydraulicEfficiency: 0.9
     },
     vehicle: {
       studyGear: 3,
@@ -248,12 +295,46 @@
     { id: "actuators", category: "Actuators / peripherals", label: "Pumps, fans, horn, locks and accessories", mass: 3, x: 20, z: 70, length: 260, width: 180, height: 100, continuous: 55, peak: 210, inrush: 310, standby: 1, sleep: 0.1, essential: false, states: "drive,charge", provenance: "Project assumption" }
   ];
 
+
+  // Final-drive catalogue. Pitch and roller follow ISO 606 / ANSI B29.1; breaking loads are typical
+  // minimum tensile values for a standard road chain and must be confirmed against the supplier datasheet.
+  const finalDriveCatalogue = [
+    { id: "415", label: "415 chain", kind: "chain", pitch: 12.7, roller: 7.77, breakingLoad: 13.7 },
+    { id: "420", label: "420 chain", kind: "chain", pitch: 12.7, roller: 7.77, breakingLoad: 18.6 },
+    { id: "428", label: "428 chain", kind: "chain", pitch: 12.7, roller: 8.51, breakingLoad: 21.8 },
+    { id: "520", label: "520 chain", kind: "chain", pitch: 15.875, roller: 10.16, breakingLoad: 31 },
+    { id: "525", label: "525 chain", kind: "chain", pitch: 15.875, roller: 10.16, breakingLoad: 37 },
+    { id: "530", label: "530 chain", kind: "chain", pitch: 15.875, roller: 10.16, breakingLoad: 41 },
+    { id: "532", label: "532 chain", kind: "chain", pitch: 15.875, roller: 11.1, breakingLoad: 45 },
+    { id: "belt8m", label: "Toothed belt 8M (8 mm)", kind: "belt", pitch: 8, roller: 0, breakingLoad: 18, pitchLineDifferential: 0.686 },
+    { id: "belt14m", label: "Toothed belt 14M (14 mm)", kind: "belt", pitch: 14, roller: 0, breakingLoad: 32, pitchLineDifferential: 1.397 },
+    { id: "custom", label: "Custom", kind: "chain" }
+  ];
+
+  // Brake hardware catalogue: common production sizes offered as dropdowns. Every list also accepts a custom value.
+  const brakeCatalogue = {
+    discOd: [160, 180, 190, 200, 210, 220, 230, 240, 245, 250, 260, 267, 270, 276, 280, 290, 296, 300, 310, 320, 330, 340],
+    mcBore: [{ value: 11, label: "11 mm" }, { value: 12, label: "12 mm" }, { value: 12.7, label: "12.7 mm (1/2\")" }, { value: 13, label: "13 mm" }, { value: 14, label: "14 mm" }, { value: 15, label: "15 mm" }, { value: 15.87, label: "15.87 mm (5/8\")" }, { value: 17.46, label: "17.46 mm (11/16\")" }, { value: 19.05, label: "19.05 mm (3/4\")" }],
+    pistonDia: ["22", "24", "25", "25.4", "26", "27", "28", "30", "32", "34", "36", "38", "40", "42", "28/30", "30/32", "30/34", "32/34", "32/36"].map(value => ({ value, label: value.includes("/") ? `${value} mm (mixed pair)` : `${value} mm` })),
+    pistonCount: [{ value: 1, label: "1 piston" }, { value: 2, label: "2 pistons" }, { value: 4, label: "4 pistons" }, { value: 6, label: "6 pistons" }],
+    architecture: [
+      { value: "floating", label: "Floating (sliding pin)", opposed: false },
+      { value: "fixed_axial", label: "Fixed, axial mount", opposed: true },
+      { value: "fixed_radial", label: "Fixed, radial mount", opposed: true },
+      { value: "monobloc_radial", label: "Monobloc, radial mount", opposed: true }
+    ],
+    padFriction: [{ value: 0.35, label: "Organic / NAO · μ 0.35" }, { value: 0.4, label: "Ceramic · μ 0.40" }, { value: 0.42, label: "Semi-metallic · μ 0.42" }, { value: 0.48, label: "Sintered road · μ 0.48" }, { value: 0.55, label: "Sintered track · μ 0.55" }]
+  };
+
   const sourceNotes = {
     trail: "Positive trail supplies a restoring tendency. Higher trail generally increases straight-line stability and steering effort while reducing manoeuvrability. Rake, tyre, wheelbase and axle load must be judged together.",
     motionRatio: "Motion ratio is shock displacement divided by wheel displacement. For locally constant geometry, wheel rate = spring rate × motion ratio².",
     antiSquat: "Anti-squat = 100 × tan(squat-line angle) / tan(load-transfer angle). Cossalter squat ratio is the reciprocal. A finite 100% result is geometrically neutral for the entered smooth-road construction.",
+    transmission: "Chain links use the ISO 606 open-chain length equation; centre distance for a whole link count uses its closed-form inverse. Axle movement is taken along the drive-centre to axle line, which matches a slotted adjuster to within a fraction of a millimetre for normal swingarm angles.",
+    motorSizing: "Constant-torque to base speed, then constant power to maximum speed. Maximum RPM is fixed by top speed in the tallest ratio and base RPM by the constant-power speed ratio, so every target becomes a single minimum-torque requirement. Acceleration is integrated with instant best-gear selection and no shift time.",
+    braking: "Quasi-static rigid-body load transfer on level ground. Brake torque is taken at the adhesion limit of each wheel; stopping distance uses the homologation form s = c·V + v²/2a with V in km/h for the free-run term. Front and rear circuits are independent, so no fixed installed distribution is assumed.",
     electricalBoundary: "Electrical results are concept screens. They do not establish thermal life, fault interruption, protection coordination, insulation, EMC, cybersecurity, functional safety, homologation or production release."
   };
 
-  global.PRD_DATA = { tabs, defaults, componentDefaults, sourceNotes, version: "1.3" };
+  global.PRD_DATA = { tabs, defaults, componentDefaults, finalDriveCatalogue, brakeCatalogue, sourceNotes, version: "1.3" };
 })(window);

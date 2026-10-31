@@ -35,14 +35,15 @@ function interpolateShockTravel(points, wheelTravel) {
 }
 
 const canonicalTabs = [
-  "stance", "steering", "suspension", "anti_squat", "sensitivity", "sag",
-  "powertrain", "vehicle_calculators", "battery_calculators", "electrical"
+  "stance", "steering", "suspension", "anti_squat", "sensitivity", "sag", "braking",
+  "powertrain", "motor_sizing", "vehicle_calculators", "battery_calculators", "electrical"
 ];
 check(JSON.stringify(PRD_DATA.tabs.map(tab => tab.id)) === JSON.stringify(canonicalTabs), "PRD tab IDs and order must remain exact");
 
 const defaultState = fixture();
 const defaultOutputs = EngineeringCore.calculate(defaultState);
-for (const key of ["massProperties", "ergonomics", "steering", "suspension", "sag", "antiSquat", "powertrain", "vehicle", "battery", "electrical", "sensitivity"]) {
+check(PRD_DATA.tabs.every((tab, index) => tab.ordinal === index + 1), "Tab ordinals must follow tab order");
+for (const key of ["massProperties", "ergonomics", "steering", "suspension", "sag", "antiSquat", "powertrain", "vehicle", "battery", "electrical", "sensitivity", "motor", "braking"]) {
   check(defaultOutputs[key]?.ok === true, `Default fixture must close ${key}: ${defaultOutputs[key]?.error || "unknown error"}`);
 }
 near(defaultOutputs.electrical.electricalMass.value, defaultOutputs.massProperties.electricalMass, 1e-9, "Electrical mass must be counted once in Mass Properties");
@@ -207,6 +208,82 @@ check(transmissions.records.every(record => record.primaryRatio > 0 && record.fi
   "Every transmission benchmark must carry primary, final, max RPM and tyre circumference for the RPM comparison");
 check(transmissions.records.every(record => record.sourceCategory && record.id && record.label), "Transmission benchmarks must retain upstream identity and category for audit");
 
+// --- Transmission: chain geometry on the real hardpoints.
+const pt = defaultOutputs.powertrain;
+const E = EngineeringCore;
+near(E.centreForLinks(E.linksForCentre(612.4, 15.875, 15, 45), 15.875, 15, 45), 612.4, 1e-6, "Centre-for-links must invert the open-chain length equation");
+near(pt.chainLinks.value, E.linksForCentre(pt.chainCentreDistance.value, 15.875, 15, 45), 1e-9, "Exact links must use the hardpoint centre distance");
+check(pt.recommendedLinks.value % 2 === 0, "Recommended chain link count must be even");
+near(pt.chainLength.value, pt.recommendedLinks.value * defaultState.powertrain.chainPitch, 1e-9, "Chain length must be links × pitch");
+near(pt.recommendedCentre.value - pt.chainCentreDistance.value, pt.axleMove.value, 1e-9, "Axle move must equal the centre-distance change");
+check(pt.chain.validLinks.every(links => links % 2 === 0), "Adjuster-valid link counts must all be even");
+check(pt.chain.withinAdjuster === pt.chain.validLinks.includes(pt.recommendedLinks.value), "Within-adjuster flag must agree with the valid list");
+near(pt.chain.frontDiameters.pitch, 15.875 / Math.sin(Math.PI / 15), 1e-9, "Chain sprocket pitch diameter is p / sin(180°/N)");
+near(pt.chainTension.value, defaultState.powertrain.maxTorque * defaultState.powertrain.primaryRatio * defaultState.powertrain.gear1 / (pt.frontPitchRadius.value / 1000) / 1000, 1e-9, "Chain tension uses peak torque through primary and first gear");
+check(pt.combos.length === 7 && pt.combos.every(row => row.length === 7) && pt.combos[3][3].current, "Sprocket matrix must span ±3 teeth with the current pair at its centre");
+near(pt.proposed.topSpeedDeltaPercent, (defaultState.powertrain.rearTeeth / defaultState.powertrain.frontTeeth) / (defaultState.powertrain.proposedRearTeeth / defaultState.powertrain.proposedFrontTeeth) * 100 - 100, 1e-9, "Proposed top-speed change follows the final-drive ratio");
+const singleSpeed = fixture();
+singleSpeed.powertrain.gearCount = 1;
+singleSpeed.powertrain.gear1 = 3.3;
+singleSpeed.powertrain.dutyGear = 1;
+const singleOut = E.calculate(singleSpeed);
+check(singleOut.powertrain.ok && singleOut.powertrain.rows.length === 1, "Single-speed transmission must solve with one ratio");
+check(singleOut.electrical.ok && singleOut.battery.ok && singleOut.vehicle.ok, "Single-speed transmission must keep downstream studies solvable");
+const beltState = fixture();
+beltState.powertrain.chainSize = "belt14m";
+beltState.powertrain.chainPitch = 14;
+const beltOut = E.calculate(beltState).powertrain;
+near(beltOut.frontPitchRadius.value, 15 * 14 / (2 * Math.PI), 1e-9, "Belt pulley pitch radius is N·p / 2π");
+check(beltOut.chain.step === 1 && beltOut.recommendedLinks.unit === "teeth", "Belts round to whole teeth, not even links");
+
+// --- Motor sizing: Ather time-step sheet (Tmax 17 N·m, 9.91:1, 194 kg) reproduced row for row.
+const atherParams = { mass: 194, inertiaFactor: 1.05, rollingResistance: 0.007, dragCoefficientArea: 0.75 * 0.6, airDensity: 1.25, wheelRadius: 0.242, efficiency: 0.9 };
+const atherBase = 4.740309847 / 0.242 * 9.91 * 60 / (2 * Math.PI);
+const atherRun = E.simulateAcceleration({ peakTorque: 17, baseRpm: atherBase, maxRpm: 1e6 }, [9.91], atherParams, { dt: 0.1, tMax: 4.05, stopAt: 99, marks: [60] });
+near(atherRun.trace.find(point => Math.abs(point.t - 1.6) < 1e-6).v, 4.801185391, 2e-3, "Ather sheet velocity at 1.6 s");
+near(atherRun.trace.find(point => Math.abs(point.t - 4.0) < 1e-6).v, 9.425342375, 5e-3, "Ather sheet velocity at 4.0 s");
+const m = defaultOutputs.motor;
+check(m.ok, `Default motor sizing must close: ${m.error}`);
+near(m.peakTorque.value, Math.max(...m.requirements.map(item => item.torque)), 1e-9, "Required peak torque is the governing requirement");
+near(m.baseRpm.value * defaultState.motor.constantPowerRatio, m.maxRpm.value, 1e-6, "Base RPM × CPSR must equal max RPM");
+check(m.requiredTimes[60] <= defaultState.motor.target0to60 + 1e-3 && m.requiredTimes[100] <= defaultState.motor.target0to100 + 1e-3, "Required motor must meet both acceleration targets");
+const req = { peakTorque: m.peakTorque.value, baseRpm: m.baseRpm.value, maxRpm: m.maxRpm.value };
+check(E.motorTorqueAt(req, m.maxRpm.value) * m.ratios.at(-1) * m.params.efficiency / m.params.wheelRadius >= E.roadLoadForce(defaultState.motor.targetTopSpeed / 3.6, m.params) - 1e-6, "Required motor must hold the top-speed target in the tallest ratio");
+const manualMotor = fixture();
+manualMotor.motor.ratioSource = "manual";
+manualMotor.motor.manualRatio = 9.91;
+manualMotor.motor.targetTopSpeed = 80;
+manualMotor.motor.target0to100 = 0;
+const manualOut = E.calculate(manualMotor).motor;
+check(manualOut.ok && manualOut.ratios.length === 1 && manualOut.ratios[0] === 9.91, "Manual ratio source must size through the single entered ratio");
+const impossible = fixture();
+impossible.motor.target0to60 = 0.5;
+check(E.calculate(impossible).motor.ok === false, "A 0–60 target faster than the wheelie limit allows must be rejected, not silently met");
+
+// --- Braking: KTM 390 sheet reproduced (sheet uses g = 9.81 and π = 3.142, so 0.1 % tolerance).
+const ktm = (mass, front, rear, cg) => ({ mass, frontKg: front, rearKg: rear, cgHeight: cg, wheelbase: 1356, frontRadius: 292.9, rearRadius: 306.0 });
+const brake = E.brakingFromVehicles(PRD_DATA.defaults.braking, ktm(249.4, 119.5, 129.9, 657.2), ktm(330.9, 122.8, 208.1, 747.0));
+const rel = (actual, expected, message) => near(actual, expected, Math.abs(expected) * 1e-3, message);
+rel(brake.solo.dynamicFrontKg, 228.2869558, "KTM dynamic front load, solo");
+rel(brake.solo.frontOnly, 0.7648650278, "KTM front-only adhesion, solo");
+rel(brake.duals.rearOnly, 0.378394941, "KTM rear-only adhesion, duals");
+rel(brake.solo.stopFront, 24.51031, "KTM front-only stopping distance, solo");
+rel(brake.duals.stopRear, 43.4156397, "KTM rear-only stopping distance, duals");
+rel(brake.solo.frontTorque, 548.1124062, "KTM front wheel torque, solo");
+rel(brake.front.pistonArea, 1231.664, "KTM front caliper piston area (4-piston opposed)");
+rel(brake.rear.pistonArea, 908.038, "KTM rear caliper piston area (1-piston floating)");
+rel(brake.solo.front.pressureBar, 25.37883103, "KTM front line pressure, solo");
+rel(brake.duals.rear.pressureBar, 49.43056134, "KTM rear line pressure, duals");
+rel(brake.solo.front.inputKg, 6.900298211, "KTM hand-lever force at lock-up, solo");
+rel(brake.duals.rear.inputKg, 21.48032365, "KTM foot-pedal force at lock-up, duals");
+rel(brake.solo.slipTable[0].front, 129.0872782, "KTM front max slip force at μ 0.1");
+near(brake.front.effectiveRadius, 146.125, 1e-9, "Effective disc radius is OD/2 − pad height/2");
+const ideal = brake.solo.slipTable.find(item => item.mu === 0.9);
+const frontLockAtIdeal = brake.solo.curves.frontLock;
+const lockFront = (frontLockAtIdeal[1].front - frontLockAtIdeal[0].front) / (frontLockAtIdeal[1].rear - frontLockAtIdeal[0].rear) * ideal.rear + frontLockAtIdeal[0].front;
+rel(lockFront, ideal.front, "Front-lock line must pass through the ideal curve at the road μ");
+check(defaultOutputs.braking.ok, `Default braking must close: ${defaultOutputs.braking.error}`);
+
 const expectedCurrentRuntime = defaultOutputs.electrical.pack.capacityAh *
   ((defaultState.electrical.socMax - defaultState.electrical.socMin) / 100) *
   defaultState.battery.capacityDerate / defaultState.battery.runtimeCurrent;
@@ -227,7 +304,7 @@ check(new Set(assetRefs.map(ref => ref.version)).size === 1,
 for (const ref of assetRefs) check(fs.existsSync(ref.file), `index.html references a missing asset: ${ref.file}`);
 check(/transmission-benchmarks\.js/.test(html), "index.html must load the transmission benchmark catalogue");
 const appSource = fs.readFileSync("app.js", "utf8");
-for (const diagram of ["steeringDiagram", "suspensionDiagram", "antiSquatDiagram", "sagDiagram", "powertrainDiagram", "electricalNetwork"]) check(appSource.includes(`function ${diagram}`), `${diagram} must remain implemented`);
+for (const diagram of ["steeringDiagram", "suspensionDiagram", "antiSquatDiagram", "sagDiagram", "powertrainDiagram", "electricalNetwork", "renderMotor", "renderBraking"]) check(appSource.includes(`function ${diagram}`), `${diagram} must remain implemented`);
 check(appSource.includes('const electricalScenarios = [["drive","Drive"],["charge","Charge"],["off","Off"]]'), "Electrical scenario selector must contain exactly Drive, Charge and Off");
 check(!appSource.includes("Measured sag checks"), "Measured sag UI must be replaced by calculated expected sag");
 check(appSource.includes("Front fork sag") && appSource.includes("Rear shock sag"), "Sag UI must report suspension-member sag");
