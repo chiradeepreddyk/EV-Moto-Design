@@ -367,3 +367,40 @@ td.numeric, th.numeric { text-align: right; font-variant-numeric: tabular-nums; 
   color: #7c8a91;
   margin-top: 1px;
 }
+
+/* ---- Compact result system: Transmission, Motor sizing, Braking ---- */
+.kpi-strip { position: relative; margin-bottom: 16px; padding: 38px 14px 14px; display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow); }
+.kpi-strip[data-runtime="stale"] { border-color: #e2c48f; }
+.kpi-strip[data-runtime="failed"] { border-color: #e4b3ad; }
+.kpi-strip:not(:has(.kpi)) { display: none; }
+.kpi-status { position: absolute; top: 10px; right: 14px; display: flex; gap: 6px; }
+.kpi { min-width: 0; padding: 10px 12px; border-radius: 10px; background: #f6f8f6; }
+.kpi span { display: block; color: var(--muted); font: 800 10px/1.2 Inter, sans-serif; letter-spacing: .06em; text-transform: uppercase; }
+.kpi strong { display: block; margin-top: 6px; color: var(--navy); font: 700 22px/1.1 Georgia, serif; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kpi strong small { color: var(--muted); font: 700 11px Inter, sans-serif; }
+.kpi em { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; font-style: normal; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kpi-mini { margin-top: 14px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.kpi-mini .kpi strong { font-size: 18px; }
+.subhead { margin: 18px 0 10px; color: var(--muted); font: 800 10px/1 Inter, sans-serif; letter-spacing: .1em; text-transform: uppercase; }
+.linked-list { margin: 12px 0 0; display: grid; gap: 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.linked-list div { display: grid; grid-template-columns: minmax(120px, 40%) 1fr; gap: 10px; padding: 8px 12px; background: #fbfbf8; font-size: 12px; }
+.linked-list div + div { border-top: 1px solid var(--line); }
+.linked-list dt { color: var(--muted); font-weight: 700; }
+.linked-list dd { margin: 0; color: var(--navy); font-weight: 700; text-align: right; }
+.linked-list dd small { display: block; color: var(--muted); font-size: 10px; font-weight: 600; }
+table.dense th, table.dense td { padding: 7px 10px; font-size: 12px; }
+table.dense tbody th { color: #40525d; background: transparent; font: 700 12px/1.35 Inter, sans-serif; letter-spacing: 0; text-transform: none; text-align: left; }
+table.kv th { width: 62%; }
+td.over { color: var(--red); font-weight: 800; }
+tr.governs td { background: var(--green-soft); }
+table.dense tr.section-row th { padding-top: 14px; color: var(--navy); background: #f3f5f2; font: 800 11px/1 Inter, sans-serif; letter-spacing: .02em; }
+.notice.compact { margin-top: 12px; padding: 9px 12px; }
+.combo-matrix { min-width: 560px; }
+.combo-matrix th, .combo-matrix td { padding: 8px 10px; font-size: 12px; text-align: center; }
+.combo-matrix tbody th { background: #f3f5f2; text-transform: none; letter-spacing: 0; }
+.combo-matrix td.current-cell { outline: 2px solid var(--navy); outline-offset: -2px; font-weight: 800; background: #fff; }
+.std-custom { margin-top: 6px; }
+.benchmark-filter.wide { min-width: 260px; }
+.compact-grid { margin-top: 10px; gap: 16px; }
+.chart-legend i.dashed { width: 16px; height: 0; border-top: 2px dashed; border-radius: 0; }
+@media (max-width: 560px) { .linked-list div { grid-template-columns: 1fr; } .linked-list dd { text-align: left; } .kpi-mini { grid-template-columns: 1fr; } }

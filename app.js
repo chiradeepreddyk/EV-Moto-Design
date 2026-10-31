@@ -7,22 +7,24 @@
   const UI_STORAGE_KEY = "moto-geometry-ui-v1.3";
   const groups = [
     ["Package", ["stance"]],
-    ["Chassis", ["steering", "suspension", "anti_squat", "sensitivity", "sag"]],
-    ["Propulsion and studies", ["powertrain", "vehicle_calculators", "battery_calculators"]],
+    ["Chassis", ["steering", "suspension", "anti_squat", "sensitivity", "sag", "braking"]],
+    ["Propulsion and studies", ["powertrain", "motor_sizing", "vehicle_calculators", "battery_calculators"]],
     ["Energy and E/E", ["electrical"]]
   ];
-  const ownerTab = { antiSquat: "anti_squat", vehicle: "vehicle_calculators", battery: "battery_calculators" };
+  const ownerTab = { antiSquat: "anti_squat", vehicle: "vehicle_calculators", battery: "battery_calculators", motor: "motor_sizing" };
   const tabFor = owner => ownerTab[owner] || owner;
   const dependencies = {
-    stance: ["steering", "suspension", "sag", "powertrain", "electrical", "sensitivity", "vehicle_calculators", "battery_calculators", "anti_squat"],
+    stance: ["steering", "suspension", "sag", "powertrain", "motor_sizing", "braking", "electrical", "sensitivity", "vehicle_calculators", "battery_calculators", "anti_squat"],
     steering: ["suspension", "sag", "sensitivity"],
     suspension: ["sag", "anti_squat", "sensitivity"],
     antiSquat: ["sensitivity"],
     sag: ["anti_squat", "sensitivity", "electrical"],
-    powertrain: ["vehicle_calculators", "anti_squat", "electrical", "battery_calculators"],
-    electrical: ["stance", "sag", "anti_squat", "vehicle_calculators", "battery_calculators", "sensitivity"],
+    powertrain: ["motor_sizing", "vehicle_calculators", "anti_squat", "electrical", "battery_calculators"],
+    electrical: ["stance", "sag", "anti_squat", "motor_sizing", "braking", "vehicle_calculators", "battery_calculators", "sensitivity"],
+    motor: [],
+    braking: [],
     battery: [],
-    vehicle: [],
+    vehicle: ["motor_sizing"],
     sensitivity: []
   };
 
@@ -37,6 +39,8 @@
   let selectedElectricalNodeId = "battery";
   let benchmarkCategory = "All";
   let transmissionReferenceId = "";
+  let comboMetric = "topSpeed";
+  const customFields = new Set();
   let stanceAdvancedOpen = false;
   let lastNetworkDragAt = 0;
   const uiPreferences = loadUiPreferences();
@@ -44,6 +48,8 @@
   electricalViewLayer = ["all","hv","lv","communications"].includes(uiPreferences.electricalViewLayer) ? uiPreferences.electricalViewLayer : "all";
   benchmarkCategory = uiPreferences.benchmarkCategory || "All";
   transmissionReferenceId = uiPreferences.transmissionReferenceId || "";
+  comboMetric = uiPreferences.comboMetric || "topSpeed";
+  (uiPreferences.customFields || []).forEach(path => customFields.add(path));
   stanceAdvancedOpen = Boolean(uiPreferences.stanceAdvancedOpen);
 
   function loadUiPreferences() {
@@ -54,6 +60,8 @@
     uiPreferences.electricalViewLayer = electricalViewLayer;
     uiPreferences.benchmarkCategory = benchmarkCategory;
     uiPreferences.transmissionReferenceId = transmissionReferenceId;
+    uiPreferences.comboMetric = comboMetric;
+    uiPreferences.customFields = [...customFields];
     uiPreferences.stanceAdvancedOpen = stanceAdvancedOpen;
     localStorage.setItem(UI_STORAGE_KEY, JSON.stringify(uiPreferences));
   }
@@ -91,6 +99,8 @@
     });
     if (!(Number(base.powertrain.dutyDurationMinutes) > 0)) base.powertrain.dutyDurationMinutes = Number(DATA.defaults.powertrain.dutyDurationMinutes || 10);
     if (!(Number(base.powertrain.dutyGear) >= 1 && Number(base.powertrain.dutyGear) <= 6)) base.powertrain.dutyGear = Number(DATA.defaults.powertrain.dutyGear || 3);
+    const gearCount = Math.max(1, Math.min(6, Math.round(Number(base.powertrain.gearCount) || 6)));
+    if (Number(base.powertrain.dutyGear) > gearCount) base.powertrain.dutyGear = gearCount;
     const legacyScenario = String(base.meta.electricalScenario || "off");
     base.meta.electricalScenario = legacyScenario === "charge" ? "charge" : ["drive","ready_to_drive","derate"].includes(legacyScenario) ? "drive" : "off";
     ["measuredFrontStatic","measuredFrontRider","measuredRearStatic","measuredRearRider"].forEach(key => delete base.sag[key]);
@@ -104,7 +114,7 @@
       tabs: {
         stance: clone(state.stance), steering: clone(state.steering), suspension: clone(state.suspension),
         anti_squat: clone(state.antiSquat), sensitivity: clone(state.sensitivity), sag: clone(state.sag),
-        powertrain: clone(state.powertrain), vehicle_calculators: clone(state.vehicle),
+        braking: clone(state.braking), powertrain: clone(state.powertrain), motor_sizing: clone(state.motor), vehicle_calculators: clone(state.vehicle),
         battery_calculators: clone(state.battery), electrical: clone(state.electrical)
       }
     };
@@ -114,7 +124,7 @@
       central_services: { mass_properties: outputs.massProperties, mass_cases: outputs.massCases, ergonomics: outputs.ergonomics },
       tabs: {
         steering: outputs.steering, suspension: outputs.suspension, anti_squat: outputs.antiSquat,
-        sensitivity: outputs.sensitivity, sag: outputs.sag, powertrain: outputs.powertrain,
+        sensitivity: outputs.sensitivity, sag: outputs.sag, braking: outputs.braking, powertrain: outputs.powertrain, motor_sizing: outputs.motor,
         vehicle_calculators: outputs.vehicle, battery_calculators: outputs.battery, electrical: outputs.electrical
       }
     };
@@ -313,22 +323,28 @@
   }
 
   function powertrainDiagram() {
-    const o=outputs.powertrain;if(!o?.ok)return invalidNotice(o,"Powertrain diagram");
-    const rearTyre=o.rearTyre,drive=o.driveCentre,rear=o.rearCentre,groundZ=Number(state.stance.rearAxleZ)-rearTyre.radius;
-    const all=[{x:rear.x-rearTyre.radius,z:groundZ},{x:rear.x+rearTyre.radius,z:rear.z+rearTyre.radius},{x:drive.x-o.frontPitchRadius.value,z:drive.z-o.frontPitchRadius.value},{x:drive.x+o.frontPitchRadius.value,z:drive.z+o.frontPitchRadius.value}],f=diagramFrame(all,900,285,42),line=t=>t?`<line x1="${f.tx(t.drive.x)}" y1="${f.ty(t.drive.z)}" x2="${f.tx(t.wheel.x)}" y2="${f.ty(t.wheel.z)}" stroke="#d97706" stroke-width="4"/>`:"";
-    return `<svg class="diagram engineering-diagram" viewBox="0 0 900 430" role="img" aria-label="Powertrain functional path and final-drive geometry">
-      <defs><marker id="power-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#266b92"/></marker></defs>
-      <text x="28" y="24" fill="#61717b" font-size="10" font-weight="800">FUNCTIONAL TORQUE PATH</text>
-      ${["Motor / engine","Primary","Selected gear","Front sprocket","Rear wheel"].map((label,index)=>`<g><rect x="${28+index*170}" y="40" width="140" height="48" rx="8" fill="#fffefb" stroke="#266b92" stroke-width="2"/><text x="${98+index*170}" y="69" text-anchor="middle" fill="#173b4d" font-size="11" font-weight="800">${label}</text>${index<4?`<line x1="${168+index*170}" y1="64" x2="${193+index*170}" y2="64" stroke="#266b92" stroke-width="3" marker-end="url(#power-arrow)"/>`:""}</g>`).join("")}
-      <text x="28" y="120" fill="#61717b" font-size="10" font-weight="800">FINAL DRIVE · MASTER FRAME · UNIFORM SCALE</text>
-      <g transform="translate(0 125)"><line x1="18" y1="${f.ty(groundZ)}" x2="882" y2="${f.ty(groundZ)}" stroke="#8f9b97" stroke-width="2"/>${diagramWheel(f,rear,rearTyre.radius)}
+    const o=outputs.powertrain;if(!o?.ok)return invalidNotice(o,"Final-drive diagram");
+    const rearTyre=o.rearTyre,drive=o.driveCentre,rear=o.rearCentre,groundZ=Number(state.stance.rearAxleZ)-rearTyre.radius,c=o.chain;
+    const ux=(rear.x-drive.x)/c.centreDistance,uz=(rear.z-drive.z)/c.centreDistance;
+    const along=d=>({x:rear.x+ux*d,z:rear.z+uz*d});
+    const slotA=along(-Number(state.powertrain.axleAdjustForward)||0),slotB=along(Number(state.powertrain.axleAdjustRearward)||0),fitted=along(c.axleMove);
+    const all=[{x:rear.x-rearTyre.radius,z:groundZ},{x:rear.x+rearTyre.radius,z:rear.z+rearTyre.radius},{x:drive.x-o.frontPitchRadius.value,z:drive.z-o.frontPitchRadius.value},{x:drive.x+o.frontPitchRadius.value+40,z:drive.z+o.frontPitchRadius.value},slotA,slotB];
+    const f=diagramFrame(all,900,330,40),line=t=>t?`<line x1="${f.tx(t.drive.x)}" y1="${f.ty(t.drive.z)}" x2="${f.tx(t.wheel.x)}" y2="${f.ty(t.wheel.z)}" stroke="#d97706" stroke-width="4"/>`:"";
+    const linkUnit=c.kind==="belt"?"teeth":"links";
+    return `<svg class="diagram engineering-diagram" viewBox="0 0 900 330" role="img" aria-label="Final-drive geometry with sprocket pitch circles, chain tangents and axle adjuster window">
+      ${diagramGrid("final-drive-grid",f,groundZ)}${diagramWheel(f,rear,rearTyre.radius,{opacity:.45})}
+      <line x1="${f.tx(slotA.x)}" y1="${f.ty(slotA.z)}" x2="${f.tx(slotB.x)}" y2="${f.ty(slotB.z)}" stroke="#266b92" stroke-width="10" stroke-linecap="round" opacity=".25"/>
+      <circle cx="${f.tx(fitted.x)}" cy="${f.ty(fitted.z)}" r="6" fill="${c.withinAdjuster?"#1f6b50":"#a43a37"}"/>
       <circle cx="${f.tx(drive.x)}" cy="${f.ty(drive.z)}" r="${o.frontPitchRadius.value*f.scale}" fill="none" stroke="#d97706" stroke-width="4"/><circle cx="${f.tx(rear.x)}" cy="${f.ty(rear.z)}" r="${o.rearPitchRadius.value*f.scale}" fill="none" stroke="#d97706" stroke-width="4"/>${line(o.upperChainTangent)}${line(o.lowerChainTangent)}
-      <line x1="${f.tx(drive.x)}" y1="${f.ty(drive.z)+28}" x2="${f.tx(rear.x)}" y2="${f.ty(rear.z)+28}" stroke="#1f6b50" stroke-width="3"/><text x="${(f.tx(drive.x)+f.tx(rear.x))/2}" y="${(f.ty(drive.z)+f.ty(rear.z))/2+48}" text-anchor="middle" fill="#1f6b50" font-size="10" font-weight="800">CENTRES ${fmt(o.chainCentreDistance.value,1)} mm · ${fmt(o.chainLinks.value,2)} PITCHES</text>
-      <text x="${f.tx(drive.x)}" y="${f.ty(drive.z)-o.frontPitchRadius.value*f.scale-10}" text-anchor="middle" fill="#d97706" font-size="10" font-weight="800">${state.powertrain.frontTeeth}T · r ${fmt(o.frontPitchRadius.value,1)}</text><text x="${f.tx(rear.x)}" y="${f.ty(rear.z)-o.rearPitchRadius.value*f.scale-10}" text-anchor="middle" fill="#d97706" font-size="10" font-weight="800">${state.powertrain.rearTeeth}T · r ${fmt(o.rearPitchRadius.value,1)}</text></g>
-    </svg><p class="diagram-note">Pitch circles and chain tangencies are calculated from entered tooth counts, pitch and master-frame centres. The ideal pitch count still requires selection of a feasible production chain length.</p>`;
+      <line x1="${f.tx(drive.x)}" y1="${f.ty(drive.z)}" x2="${f.tx(rear.x)}" y2="${f.ty(rear.z)}" stroke="#1f6b50" stroke-width="1.5" stroke-dasharray="6 5"/>
+      <text x="22" y="40" fill="#1f6b50" font-size="11" font-weight="800">C ${fmt(c.centreDistance,1)} mm · ${c.recommended} ${linkUnit} · ${fmt(c.length,0)} mm · axle ${c.axleMove>=0?"+":"−"}${fmt(Math.abs(c.axleMove),1)} mm</text>
+      <text x="${f.tx(drive.x)}" y="${f.ty(drive.z)-o.frontPitchRadius.value*f.scale-10}" text-anchor="middle" fill="#d97706" font-size="10" font-weight="800">${state.powertrain.frontTeeth}T · Ø${fmt(c.frontDiameters.pitch,1)}</text><text x="${f.tx(rear.x)}" y="${f.ty(rear.z)-o.rearPitchRadius.value*f.scale-10}" text-anchor="middle" fill="#d97706" font-size="10" font-weight="800">${state.powertrain.rearTeeth}T · Ø${fmt(c.rearDiameters.pitch,1)}</text>
+      <text x="${f.tx(rear.x)}" y="${f.ty(rear.z)+o.rearPitchRadius.value*f.scale+18}" text-anchor="middle" fill="#266b92" font-size="10" font-weight="800">ADJUSTER −${fmt(state.powertrain.axleAdjustForward,0)} / +${fmt(state.powertrain.axleAdjustRearward,0)} mm</text>
+      <text x="22" y="22" fill="#61717b" font-size="10" font-weight="800">FINAL DRIVE · MASTER FRAME · UNIFORM SCALE</text>
+    </svg><p class="diagram-note">Pitch circles and tangents use the real drive-sprocket and axle hardpoints. The blue band is the adjuster window; the dot is where the axle sits with the recommended ${c.kind} (green inside the window, red outside).</p>`;
   }
 
-  function canvasChart(id, aria, height = 320) { return `<canvas class="chart" id="${id}" height="${height}" aria-label="${esc(aria)}"></canvas>`; }
+  function canvasChart(id, aria, height = 320) { return `<canvas class="chart" id="${id}" height="${height}" style="height:${height}px" role="img" aria-label="${esc(aria)}"></canvas>`; }
 
   const markerColours = { sag: "#266b92", transition: "#6e56a0", bumpstop: "#d75f36", limit: "#61717b" };
 
@@ -427,7 +443,7 @@
   }
 
   function mechanicalFlow() {
-    return `<div class="flow-grid"><div class="flow-lane" style="border-color:#2f855a;background:#eef7f1"><div class="flow-nodes">${["Stance", "Steering", "Suspension", "Sag + loaded geometry", "Anti-squat"].map((label, i, arr) => `<div class="flow-node">${label}</div>${i < arr.length-1 ? `<div class="flow-arrow">→</div>` : ""}`).join("")}</div></div><div class="flow-lane" style="border-color:#266b92;background:#eef5f9"><div class="flow-nodes"><div class="flow-node">Component instances</div><div class="flow-arrow">→</div><div class="flow-node">Mass Properties</div><div class="flow-arrow">→</div><div class="flow-node">Axle loads + CG</div><div class="flow-arrow">→</div><div class="flow-node">Loaded consumers</div></div></div><div class="notice">Powertrain owns torque-speed and final-drive definitions. Sensitivity and calculators read a frozen revision and create proposals only.</div></div>`;
+    return `<div class="flow-grid"><div class="flow-lane" style="border-color:#2f855a;background:#eef7f1"><div class="flow-nodes">${["Stance", "Steering", "Suspension", "Sag + loaded geometry", "Anti-squat"].map((label, i, arr) => `<div class="flow-node">${label}</div>${i < arr.length-1 ? `<div class="flow-arrow">→</div>` : ""}`).join("")}</div></div><div class="flow-lane" style="border-color:#266b92;background:#eef5f9"><div class="flow-nodes"><div class="flow-node">Component instances</div><div class="flow-arrow">→</div><div class="flow-node">Mass Properties</div><div class="flow-arrow">→</div><div class="flow-node">Axle loads + CG</div><div class="flow-arrow">→</div><div class="flow-node">Loaded consumers</div></div></div><div class="notice">Motor sizing owns the committed torque-speed envelope; Transmission owns the ratio stack and final drive. Sensitivity and calculators read a frozen revision and create proposals only.</div></div>`;
   }
 
   function electricalFlow(graph) {
@@ -613,126 +629,611 @@
     return `<section class="view ${activeTab === tab.id ? "active" : ""}" id="view-${tab.id}">${viewHead(tab,true)}<div class="grid two"><article class="panel"><h3>Frozen study definition</h3><div class="fields">${input("sensitivity.parameter","Parameter","",{type:"select",values:options})}${input("sensitivity.step","Central-difference step","native units")}${input("sensitivity.tolerance","Manufacturing / adjustment tolerance","native units")}</div><div class="notice" style="margin-top:14px">Baseline revision ${state.meta.revision} is read-only for this run. Results are proposals and cannot overwrite an owning tab. The single-parameter tolerance effect is not a multi-variable statistical RSS.</div></article><article class="panel"><h3>Local response</h3>${invalidNotice(o,"Sensitivity study")}<div class="table-wrap"><table><thead><tr><th>Output</th><th class="numeric">Baseline</th><th class="numeric">− step</th><th class="numeric">+ step</th><th class="numeric">Central derivative</th><th class="numeric">Forward / backward</th><th>Response</th><th class="numeric">Tolerance effect</th><th class="numeric">Worst case</th></tr></thead><tbody>${(o.rows || []).map(row => `<tr><td>${esc(row.output)}</td><td class="numeric">${fmt(row.base,3)}</td><td class="numeric">${fmt(row.minus,3)}</td><td class="numeric">${fmt(row.plus,3)}</td><td class="numeric">${fmt(row.derivative,4)}</td><td class="numeric">${fmt(row.forward,4)} / ${fmt(row.backward,4)}</td><td><span class="badge ${row.valid ? "review" : "conflict_invalid"}">${esc(row.response)}</span><br>${fmt(row.asymmetry,1)}% asymmetry</td><td class="numeric">${fmt(row.rssAtTolerance,4)}</td><td class="numeric">${fmt(row.arithmeticWorstCase,4)}</td></tr>`).join("")}</tbody></table></div></article></div></section>`;
   }
 
-  function renderPowertrain(tab) {
-    const o = outputs.powertrain;
-    return `<section class="view ${activeTab === tab.id ? "active" : ""}" id="view-${tab.id}">${viewHead(tab)}<div class="grid two"><article class="panel"><h3>Committed torque-speed and final drive</h3><div class="fields">${input("powertrain.type","Powertrain type","",{type:"select",values:["Electric","ICE"]})}${input("powertrain.maxTorque","Maximum torque","N·m")}${input("powertrain.baseRpm","Base RPM","rpm")}${input("powertrain.maxRpm","Maximum RPM","rpm")}${input("powertrain.dutyTorque","Named-duty torque","N·m")}${input("powertrain.dutyRpm","Named-duty RPM","rpm")}${input("powertrain.primaryRatio","Primary ratio","ratio",{step:"0.001"})}${[1,2,3,4,5,6].map(i => input(`powertrain.gear${i}`,`Gear ${i} ratio`,"ratio",{step:"0.001"})).join("")}${input("powertrain.frontTeeth","Front sprocket","teeth")}${input("powertrain.rearTeeth","Rear sprocket","teeth")}${input("powertrain.chainPitch","Chain pitch","mm")}${input("powertrain.driveSprocketX","Drive sprocket X","mm")}${input("powertrain.driveSprocketZ","Drive sprocket Z","mm")}${input("powertrain.drivelineEfficiency","Driveline efficiency","fraction",{step:"0.01"})}${input("powertrain.motorEfficiency","Motor efficiency","fraction",{step:"0.01"})}${input("powertrain.inverterEfficiency","Inverter efficiency","fraction",{step:"0.01"})}${input("powertrain.provenance","Torque-speed provenance","",{type:"text",full:true})}</div></article><div><article class="panel"><h3>Kinematic and final-drive outputs</h3>${invalidNotice(o,"Powertrain")}<div class="metric-grid">${metric("Final ratio",o.finalRatio,{owner:"powertrain",digits:3})}${metric("Duty shaft power",o.shaftPower,{owner:"powertrain",digits:2})}${metric("Kinematic top speed",o.kinematicTopSpeed,{owner:"powertrain"})}${metric("Power to mass",o.powerToWeight,{owner:"powertrain",digits:3})}${metric("Front pitch radius",o.frontPitchRadius,{owner:"powertrain"})}${metric("Rear pitch radius",o.rearPitchRadius,{owner:"powertrain"})}${metric("Chain centre distance",o.chainCentreDistance,{owner:"powertrain"})}${metric("Ideal chain pitches",o.chainLinks,{owner:"powertrain",digits:2})}</div></article><article class="panel"><h3>Per-gear matrix</h3><div class="table-wrap"><table><thead><tr><th>Gear</th><th class="numeric">Ratio</th><th class="numeric">Overall</th><th class="numeric">Speed @ max RPM</th><th class="numeric">Duty speed</th><th class="numeric">Duty wheel torque</th></tr></thead><tbody>${(o.rows || []).map(row => `<tr><td>${row.gear}</td><td class="numeric">${fmt(row.gearRatio,3)}</td><td class="numeric">${fmt(row.overallRatio,3)}</td><td class="numeric">${fmt(row.speedAtMaxRpm,1)} km/h</td><td class="numeric">${fmt(row.speedAtDutyRpm,1)} km/h</td><td class="numeric">${fmt(row.wheelTorqueAtDuty,0)} N·m</td></tr>`).join("")}</tbody></table></div></article>${canvasChart("powertrainChart","Per-gear speed curves through motor RPM")}</div></div></section>`;
+  // ---- Compact helpers shared by Transmission, Motor sizing and Braking ------------------
+  // These tabs report many numbers, so results use dense tiles and tables. Every value is still a
+  // calculated, not-evaluated result; the definition lives in the tile tooltip.
+  const SERIES_COLOURS = ["#1f6b50", "#266b92", "#6e56a0", "#a66516", "#b84d56", "#465b66"];
+  function signed(value, digits = 1) { return Number.isFinite(Number(value)) ? `${Number(value) >= 0 ? "+" : "−"}${fmt(Math.abs(Number(value)), digits)}` : "—"; }
+  function kpi(label, item, digits = 1, note = "") {
+    const v = item && typeof item === "object" && "value" in item ? item : { value: item, unit: "" };
+    const shown = typeof v.value === "string" ? esc(v.value) : fmt(v.value, digits);
+    return `<div class="kpi" title="${esc(v.definition || "")}"><span>${esc(label)}</span><strong>${shown}${v.unit ? ` <small>${esc(v.unit)}</small>` : ""}</strong>${note ? `<em>${esc(note)}</em>` : ""}</div>`;
+  }
+  function kpiStrip(owner, tiles) {
+    const result = outputs[owner];
+    const state_ = result?.ok === false ? "failed" : stale.has(tabFor(owner)) ? "stale" : "current";
+    return `<div class="kpi-strip" data-runtime="${state_}"><div class="kpi-status"><span class="badge ${state_}">${state_}</span><span class="badge not_evaluated">not evaluated</span></div>${tiles.join("")}</div>`;
+  }
+  function linkedList(rows) {
+    return `<dl class="linked-list">${rows.map(([label, value, source]) => `<div><dt>${esc(label)}</dt><dd>${value}${source ? `<small>${esc(source)}</small>` : ""}</dd></div>`).join("")}</dl>`;
+  }
+  function sourceTag(owner) { return `${owner} · rev ${state.meta.domainRevisions?.[owner] || 1}`; }
+  function legend(items) {
+    return `<div class="chart-legend">${items.map(([label, colour, dashed]) => `<span><i class="${dashed ? "dashed" : ""}" style="${dashed ? `border-color:${colour}` : `background:${colour}`}"></i>${esc(label)}</span>`).join("")}</div>`;
+  }
+  // Dropdown of industry-standard values with a "Custom…" escape hatch that reveals a free entry box.
+  function stdField(path, label, unit, values, options = {}) {
+    const value = get(path);
+    const items = values.map(item => typeof item === "object" ? item : { value: item, label: `${item}${unit ? ` ${unit}` : ""}` });
+    const isStandard = items.some(item => String(item.value) === String(value)) && !customFields.has(path);
+    const id = `std-${path.replace(/[^a-zA-Z0-9_-]+/g, "-")}-${++fieldSequence}`;
+    const owner = options.owner || path.split(".")[0];
+    const numeric = items.every(item => typeof item.value === "number");
+    const select = `<select id="${id}" data-std-path="${esc(path)}" data-owner="${esc(owner)}" data-numeric="${numeric}">${items.map(item => `<option value="${esc(item.value)}" ${isStandard && String(item.value) === String(value) ? "selected" : ""}>${esc(item.label)}</option>`).join("")}${options.noCustom ? "" : `<option value="__custom" ${isStandard ? "" : "selected"}>Custom…</option>`}</select>`;
+    const custom = isStandard || options.noCustom ? "" : `<div class="field-row std-custom"><input data-path="${esc(path)}" data-owner="${esc(owner)}" type="${numeric ? "number" : "text"}" value="${esc(value)}" ${options.step ? `step="${options.step}"` : ""} aria-label="${esc(label)} custom value"><span class="unit-label">${esc(unit || "—")}</span></div>`;
+    return `<div class="field ${options.full ? "full" : ""}"><label for="${id}">${esc(label)}</label>${select}${custom}${options.help ? `<small>${esc(options.help)}</small>` : ""}</div>`;
   }
 
-  // ---- Transmission comparison -------------------------------------------------
-  // The reference vehicle is a read-only overlay. Selecting one never writes to Powertrain
-  // and never creates a design revision; it only changes what the two charts draw alongside.
+  // ---- Chart engine: multi-series XY plot with optional right axis ------------------------
+  function niceCeilStep(raw) {
+    if (!(raw > 0)) return 1;
+    const mag = Math.pow(10, Math.floor(Math.log10(raw))), n = raw / mag;
+    return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10) * mag;
+  }
+  function axisLabel(value) {
+    const abs = Math.abs(value);
+    if (abs >= 1000) return Math.round(value).toLocaleString();
+    if (abs >= 10) return String(Math.round(value * 10) / 10);
+    return String(Math.round(value * 100) / 100);
+  }
+  function xyChart(canvas, cfg) {
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect(), ratio = window.devicePixelRatio || 1;
+    if (!rect.width || !rect.height) return;
+    canvas.width = rect.width * ratio; canvas.height = rect.height * ratio;
+    const ctx = canvas.getContext("2d"); ctx.scale(ratio, ratio);
+    const W = rect.width, H = rect.height;
+    const series = cfg.series.filter(item => item.data?.length);
+    const hasY2 = series.some(item => item.axis === "y2");
+    const pad = { l: 60, r: hasY2 ? 60 : 20, t: 14, b: 46 };
+    const finitePoints = list => list.filter(point => Number.isFinite(point?.[0]) && Number.isFinite(point?.[1]));
+    const values = axis => series.filter(item => (item.axis || "y") === axis).flatMap(item => finitePoints(item.data).map(point => point[1]));
+    const xs = series.flatMap(item => finitePoints(item.data).map(point => point[0]));
+    if (!xs.length) return;
+    const xMin = cfg.xMin ?? 0;
+    const xStep = niceCeilStep(((cfg.xMax ?? Math.max(...xs)) - xMin) / 6);
+    const xMax = cfg.xMax ?? Math.ceil(Math.max(...xs) / xStep) * xStep;
+    const yMin = cfg.yMin ?? 0;
+    const yRawMax = Math.max(...values("y"), ...(cfg.yExtra || []), yMin + 1e-6);
+    const yStep = niceCeilStep((yRawMax - yMin) / 5);
+    const yMax = cfg.yMax ?? yMin + Math.ceil((yRawMax - yMin) / yStep) * yStep;
+    const lines = Math.max(1, Math.round((yMax - yMin) / yStep));
+    const y2Step = hasY2 ? niceCeilStep(Math.max(...values("y2"), 1e-6) / lines) : 0;
+    const y2Max = y2Step * lines;
+    const plotW = W - pad.l - pad.r, plotH = H - pad.t - pad.b;
+    const tx = x => pad.l + (x - xMin) / Math.max(1e-9, xMax - xMin) * plotW;
+    const ty = y => pad.t + (yMax - y) / Math.max(1e-9, yMax - yMin) * plotH;
+    const ty2 = y => pad.t + (y2Max - y) / Math.max(1e-9, y2Max) * plotH;
+    ctx.clearRect(0, 0, W, H);
+    ctx.font = "11px Inter, system-ui"; ctx.lineWidth = 1; ctx.strokeStyle = "#e3e6e2"; ctx.fillStyle = "#61717b";
+    for (let i = 0; i <= lines; i += 1) {
+      const y = pad.t + plotH * i / lines;
+      ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(W - pad.r, y); ctx.stroke();
+      ctx.textAlign = "right"; ctx.fillText(axisLabel(yMax - (yMax - yMin) * i / lines), pad.l - 8, y + 4);
+      if (hasY2) { ctx.textAlign = "left"; ctx.fillText(axisLabel(y2Max - y2Max * i / lines), W - pad.r + 8, y + 4); }
+    }
+    ctx.textAlign = "center";
+    for (let x = xMin; x <= xMax + 1e-9; x += xStep) {
+      const px = tx(x);
+      ctx.strokeStyle = "#eef0ed"; ctx.beginPath(); ctx.moveTo(px, pad.t); ctx.lineTo(px, H - pad.b); ctx.stroke();
+      ctx.fillText(axisLabel(x), px, H - pad.b + 16);
+    }
+    ctx.strokeStyle = "#a6afa9"; ctx.beginPath(); ctx.moveTo(pad.l, pad.t); ctx.lineTo(pad.l, H - pad.b); ctx.lineTo(W - pad.r, H - pad.b); ctx.stroke();
+    ctx.fillStyle = "#334650"; ctx.font = "600 11px Inter, system-ui";
+    ctx.fillText(cfg.xLabel || "", pad.l + plotW / 2, H - 8);
+    ctx.save(); ctx.translate(14, pad.t + plotH / 2); ctx.rotate(-Math.PI / 2); ctx.fillText(cfg.yLabel || "", 0, 0); ctx.restore();
+    if (hasY2) { ctx.save(); ctx.translate(W - 12, pad.t + plotH / 2); ctx.rotate(Math.PI / 2); ctx.fillText(cfg.y2Label || "", 0, 0); ctx.restore(); }
+    ctx.save(); ctx.beginPath(); ctx.rect(pad.l, pad.t - 2, plotW + 2, plotH + 4); ctx.clip();
+    (cfg.hLines || []).forEach(line => {
+      const y = (line.axis === "y2" ? ty2 : ty)(line.y);
+      ctx.strokeStyle = line.colour || "#8f9b97"; ctx.setLineDash([5, 4]); ctx.lineWidth = 1.4;
+      ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(W - pad.r, y); ctx.stroke(); ctx.setLineDash([]);
+      if (line.label) { ctx.fillStyle = line.colour || "#61717b"; ctx.font = "700 10px Inter, system-ui"; ctx.textAlign = "right"; ctx.fillText(line.label, W - pad.r - 6, y - 5); }
+    });
+    (cfg.vLines || []).forEach(line => {
+      const x = tx(line.x);
+      ctx.strokeStyle = line.colour || "#8f9b97"; ctx.setLineDash([5, 4]); ctx.lineWidth = 1.4;
+      ctx.beginPath(); ctx.moveTo(x, pad.t); ctx.lineTo(x, H - pad.b); ctx.stroke(); ctx.setLineDash([]);
+      if (line.label) { ctx.fillStyle = line.colour || "#61717b"; ctx.font = "700 10px Inter, system-ui"; ctx.textAlign = "left"; ctx.fillText(line.label, x + 5, pad.t + 12); }
+    });
+    series.forEach(item => {
+      const yOf = item.axis === "y2" ? ty2 : ty;
+      ctx.strokeStyle = item.colour; ctx.lineWidth = item.width || 2.4; ctx.setLineDash(item.dash || []);
+      ctx.beginPath(); let pen = false;
+      item.data.forEach(point => {
+        if (!Number.isFinite(point?.[0]) || !Number.isFinite(point?.[1])) { pen = false; return; }
+        const x = tx(point[0]), y = yOf(point[1]);
+        pen ? ctx.lineTo(x, y) : ctx.moveTo(x, y); pen = true;
+      });
+      ctx.stroke(); ctx.setLineDash([]);
+      if (item.endLabel) {
+        const last = finitePoints(item.data).at(-1);
+        if (last) { ctx.fillStyle = item.colour; ctx.font = "700 10px Inter, system-ui"; ctx.textAlign = "right"; ctx.fillText(item.endLabel, tx(last[0]) - 4, yOf(last[1]) - 6); }
+      }
+    });
+    ctx.restore();
+    (cfg.points || []).forEach(point => {
+      if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) return;
+      const x = tx(point.x), y = (point.axis === "y2" ? ty2 : ty)(point.y);
+      ctx.fillStyle = point.colour || "#d75f36"; ctx.strokeStyle = "#fffefb"; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(x, y, point.r || 5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      if (point.label) { ctx.font = "700 10px Inter, system-ui"; ctx.textAlign = point.align || "left"; ctx.fillText(point.label, x + (point.align === "right" ? -8 : 8), y - 8); }
+    });
+  }
+
+  // ---- Transmission ------------------------------------------------------------------------
+  const comboMetrics = [["topSpeed", "Top speed @ max RPM"], ["delta", "Top speed change vs current"], ["torque", "First-gear wheel torque"], ["ratio", "Final-drive ratio"], ["links", "Links for the hardpoints"]];
+  function renderPowertrain(tab) {
+    const o = outputs.powertrain, p = state.powertrain, ok = o?.ok === true;
+    const gearCount = Math.max(1, Math.min(6, Math.round(Number(p.gearCount) || 6)));
+    const kind = String(p.chainSize).startsWith("belt") ? "belt" : "chain";
+    const linkUnit = kind === "belt" ? "teeth" : "links";
+    const tyre = Core.tyre(state.stance.rearTyreWidth, state.stance.rearTyreAspect, state.stance.rearRim);
+    const tiles = ok ? [
+      kpi("Final drive", o.finalRatio, 3, `${p.frontTeeth} / ${p.rearTeeth} teeth`),
+      kpi(gearCount > 1 ? "Overall ratio range" : "Overall ratio", { value: gearCount > 1 ? `${fmt(o.overallFirst.value, 2)} → ${fmt(o.overallTop.value, 2)}` : fmt(o.overallFirst.value, 3), definition: "Primary × gear × final drive" }, 2, gearCount > 1 ? `G1 → G${gearCount} · spread ${fmt(o.ratioSpread.value, 2)}` : "single speed"),
+      kpi("Speed @ max RPM", o.kinematicTopSpeed, 1, `top gear, ${fmt(p.maxRpm, 0)} rpm`),
+      kpi(kind === "belt" ? "Belt" : "Chain", { value: o.recommendedLinks.value, unit: linkUnit, definition: o.recommendedLinks.definition }, 0, `${fmt(o.chainLength.value, 0)} mm · axle ${signed(o.axleMove.value, 1)} mm`),
+      kpi(`${kind === "belt" ? "Belt" : "Chain"} safety factor`, o.chainSafetyFactor, 1, `${fmt(o.chainTension.value, 2)} kN peak, G1`),
+      kpi("Wrap, small sprocket", o.wrapAngle, 0, `${fmt(o.teethEngaged.value, 1)} teeth engaged`)
+    ] : [];
+    const gearInputs = Array.from({ length: gearCount }, (_, i) => input(`powertrain.gear${i + 1}`, gearCount === 1 ? "Reduction ratio" : `Gear ${i + 1}`, "ratio", { step: "0.001" })).join("");
+    const catalogue = (DATA.finalDriveCatalogue || []).map(item => ({ value: item.id, label: item.id === "custom" ? "Custom" : `${item.label} · ${item.pitch} mm` }));
+    const rows = ok ? o.rows.map(row => `<tr><td>${gearCount === 1 ? "Single" : `G${row.gear}`}</td><td class="numeric">${fmt(row.gearRatio, 3)}</td><td class="numeric"><strong>${fmt(row.overallRatio, 3)}</strong></td><td class="numeric">${row.stepPercent === null ? "—" : `${fmt(row.stepPercent, 1)}%`}</td><td class="numeric">${fmt(row.speedAtMaxRpm, 1)}</td><td class="numeric ${row.cruiseOverRedline ? "over" : ""}">${row.rpmAtCruise === null ? "—" : fmt(row.rpmAtCruise, 0)}</td><td class="numeric">${fmt(row.wheelTorqueAtPeak, 0)}</td><td class="numeric">${fmt(row.tractiveForceAtPeak, 0)}</td></tr>`).join("") : "";
+    return `<section class="view ${activeTab === tab.id ? "active" : ""}" id="view-${tab.id}">${viewHead(tab)}
+      ${kpiStrip("powertrain", tiles)}${invalidNotice(o, "Transmission")}
+      <div class="grid two">
+        <div>
+          <article class="panel"><h3>Ratio stack</h3><div class="fields">
+            ${input("powertrain.gearCount", "Gear count", "", { type: "select", values: [1, 2, 3, 4, 5, 6].map(n => ({ value: n, label: n === 1 ? "1 · single-speed reduction" : `${n} speeds` })) })}
+            ${input("powertrain.primaryRatio", "Primary ratio", "ratio", { step: "0.001" })}
+            ${gearInputs}
+            ${input("powertrain.frontTeeth", "Front sprocket", "teeth")}
+            ${input("powertrain.rearTeeth", "Rear sprocket", "teeth")}
+            ${input("powertrain.drivelineEfficiency", "Driveline efficiency", "fraction", { step: "0.01" })}
+          </div>
+          <h4 class="subhead">Linked inputs</h4>
+          ${linkedList([
+            ["Motor max RPM", `${fmt(p.maxRpm, 0)} rpm`, sourceTag("powertrain") + " · Motor sizing"],
+            ["Motor peak torque", `${fmt(p.maxTorque, 0)} N·m`, "Motor sizing"],
+            ["Rear tyre", tyre.ok ? `${state.stance.rearTyreWidth}/${state.stance.rearTyreAspect} R${state.stance.rearRim} · ${fmt(tyre.circumference, 0)} mm` : "—", sourceTag("stance")]
+          ])}</article>
+          <article class="panel"><h3>Final drive & hardpoints</h3><div class="fields">
+            ${input("powertrain.chainSize", "Chain / belt size", "", { type: "select", values: catalogue, full: true, help: "Selecting a size fills pitch, roller and typical breaking load. Editing any of them switches to Custom." })}
+            ${input("powertrain.chainPitch", "Pitch", "mm", { step: "0.001" })}
+            ${kind === "chain" ? input("powertrain.chainRollerDia", "Roller diameter", "mm", { step: "0.01" }) : ""}
+            ${input("powertrain.chainBreakingLoad", "Breaking load", "kN", { step: "0.1", help: "Typical minimum tensile; confirm on the supplier datasheet." })}
+            ${input("powertrain.driveSprocketX", "Drive sprocket X", "mm")}
+            ${input("powertrain.driveSprocketZ", "Drive sprocket Z", "mm")}
+            ${input("powertrain.axleAdjustForward", "Adjuster travel forward", "mm")}
+            ${input("powertrain.axleAdjustRearward", "Adjuster travel rearward", "mm")}
+          </div>
+          ${linkedList([["Rear axle", `${fmt(state.stance.rearAxleX, 0)}, ${fmt(state.stance.rearAxleZ, 0)} mm`, sourceTag("stance")], ["Centre distance", ok ? `${fmt(o.chainCentreDistance.value, 1)} mm` : "—", "drive sprocket → axle"]])}</article>
+          <article class="panel"><h3>Study points</h3><div class="fields">
+            ${input("powertrain.cruiseSpeed", "Cruise speed", "km/h", { help: "RPM per gear at this speed." })}
+            <div></div>
+            ${input("powertrain.proposedFrontTeeth", "Proposed front", "teeth")}
+            ${input("powertrain.proposedRearTeeth", "Proposed rear", "teeth")}
+          </div></article>
+        </div>
+        <div>
+          <article class="panel"><h3>Final-drive construction</h3>${powertrainDiagram()}</article>
+          <article class="panel"><h3>Per-gear matrix</h3><div class="table-wrap"><table class="dense"><thead><tr><th>Gear</th><th class="numeric">Ratio</th><th class="numeric">Overall</th><th class="numeric">Step</th><th class="numeric">km/h @ max RPM</th><th class="numeric">RPM @ ${fmt(p.cruiseSpeed, 0)} km/h</th><th class="numeric">Wheel N·m @ peak</th><th class="numeric">Tractive N @ peak</th></tr></thead><tbody>${rows}</tbody></table></div>
+            <p class="diagram-note">Wheel torque and tractive force use the committed peak motor torque and driveline efficiency. RPM in red exceeds max RPM.</p></article>
+          <article class="panel"><h3>Road speed vs motor RPM</h3>${canvasChart("speedRpmChart", "Road speed against motor RPM for every gear", 300)}${legend(ok ? o.rows.map(row => [gearCount === 1 ? "Single speed" : `G${row.gear}`, SERIES_COLOURS[row.gear - 1]]).concat([[`Cruise ${fmt(p.cruiseSpeed, 0)} km/h`, "#8f9b97", true]]) : [])}</article>
+        </div>
+      </div>
+      ${ok ? chainPanels(o, linkUnit) : ""}
+      ${ok ? comboPanel(o, linkUnit) : ""}
+      ${ok ? proposedPanel(o, linkUnit) : ""}
+      ${transmissionComparisonPanel()}
+    </section>`;
+  }
+  function chainPanels(o, linkUnit) {
+    const c = o.chain, p = state.powertrain;
+    const fits = c.validLinks.length ? c.validLinks.join(", ") : "none";
+    return `<div class="grid equal">
+      <article class="panel"><h3>${c.kind === "belt" ? "Belt length" : "Chain length & links"}</h3>
+        <div class="table-wrap"><table class="dense kv"><tbody>
+          <tr><th>Centre distance at hardpoints</th><td class="numeric">${fmt(c.centreDistance, 1)} mm</td></tr>
+          <tr><th>Exact length for the hardpoints</th><td class="numeric">${fmt(c.exact, 2)} ${linkUnit}</td></tr>
+          <tr><th>Recommended ${c.kind === "belt" ? "tooth count" : "link count (even)"}</th><td class="numeric"><strong>${c.recommended} ${linkUnit}</strong></td></tr>
+          <tr><th>${c.kind === "belt" ? "Belt" : "Chain"} length</th><td class="numeric">${fmt(c.length, 1)} mm</td></tr>
+          <tr><th>Centre distance with recommended length</th><td class="numeric">${fmt(c.recommendedCentre, 1)} mm</td></tr>
+          <tr><th>Axle move from hardpoint</th><td class="numeric">${signed(c.axleMove, 1)} mm <small>${c.axleMove >= 0 ? "rearward" : "forward"}</small></td></tr>
+          <tr><th>Adjuster window</th><td class="numeric">−${fmt(p.axleAdjustForward, 0)} / +${fmt(p.axleAdjustRearward, 0)} mm</td></tr>
+          <tr><th>${c.kind === "belt" ? "Tooth counts" : "Link counts"} that fit the adjuster</th><td class="numeric">${esc(fits)}</td></tr>
+        </tbody></table></div>
+        ${c.withinAdjuster ? `<div class="notice success compact">The recommended ${c.kind} fits inside the adjuster window.</div>` : `<div class="notice danger compact">No ${c.kind === "belt" ? "whole tooth count" : "even link count"} fits inside the adjuster window. Move the drive sprocket or axle hardpoint, change sprockets or lengthen the adjuster slot.</div>`}
+        <p class="diagram-note">${esc(DATA.sourceNotes.transmission)}</p></article>
+      <article class="panel"><h3>Sprockets, loading & wear</h3>
+        <div class="table-wrap"><table class="dense"><thead><tr><th></th><th class="numeric">Front</th><th class="numeric">Rear</th></tr></thead><tbody>
+          <tr><th>Teeth</th><td class="numeric">${c.front}</td><td class="numeric">${c.rear}</td></tr>
+          <tr><th>Pitch diameter</th><td class="numeric">${fmt(c.frontDiameters.pitch, 1)} mm</td><td class="numeric">${fmt(c.rearDiameters.pitch, 1)} mm</td></tr>
+          <tr><th>Outside diameter</th><td class="numeric">${fmt(c.frontDiameters.outside, 1)} mm</td><td class="numeric">${fmt(c.rearDiameters.outside, 1)} mm</td></tr>
+          ${c.kind === "chain" ? `<tr><th>Root diameter</th><td class="numeric">${fmt(c.frontDiameters.root, 1)} mm</td><td class="numeric">${fmt(c.rearDiameters.root, 1)} mm</td></tr>` : ""}
+          <tr><th>Same tooth meets same ${c.kind === "belt" ? "belt tooth" : "link"} every</th><td class="numeric">${fmt(c.sameToothFront, 0)} rev</td><td class="numeric">${fmt(c.sameToothRear, 0)} rev</td></tr>
+        </tbody></table></div>
+        <div class="table-wrap" style="margin-top:12px"><table class="dense kv"><tbody>
+          <tr><th>Wrap on small sprocket</th><td class="numeric">${fmt(o.wrapAngle.value, 1)}° · ${fmt(o.teethEngaged.value, 1)} teeth</td></tr>
+          <tr><th>Peak tension (G1, peak torque)</th><td class="numeric">${fmt(o.chainTension.value, 2)} kN</td></tr>
+          <tr><th>Breaking load</th><td class="numeric">${fmt(p.chainBreakingLoad, 1)} kN</td></tr>
+          <tr><th>Static safety factor</th><td class="numeric"><strong>${fmt(o.chainSafetyFactor.value, 2)}×</strong></td></tr>
+          <tr><th>${c.kind === "belt" ? "Belt" : "Chain"} speed at max RPM, top gear</th><td class="numeric">${fmt(o.chainSpeed.value, 1)} m/s</td></tr>
+          <tr><th>Sprocket common factor</th><td class="numeric">${c.sprocketCommonFactor}${c.sprocketCommonFactor === 1 ? " · hunting pair" : " · same teeth re-mesh"}</td></tr>
+        </tbody></table></div>
+        <p class="diagram-note">A higher wear-recurrence count spreads contact across more tooth and link pairs. Safety factor is static against breaking load; fatigue, shock and wear allowance are not evaluated.</p></article>
+    </div>`;
+  }
+  function comboPanel(o, linkUnit) {
+    if (!["topSpeed", "delta", "torque", "ratio", "links"].includes(comboMetric)) comboMetric = "topSpeed";
+    const rears = o.combos[0]?.map(cell => cell.rear) || [];
+    const cellValue = cell => comboMetric === "topSpeed" ? fmt(cell.topSpeed, 1) : comboMetric === "delta" ? `${signed(cell.topSpeedDeltaPercent, 1)}%` : comboMetric === "torque" ? fmt(cell.firstGearWheelTorque, 0) : comboMetric === "ratio" ? fmt(cell.finalRatio, 3) : cell.links === null ? "—" : `${cell.links}${cell.withinAdjuster ? "" : "*"}`;
+    const span = Math.max(1, ...o.combos.flat().map(cell => Math.abs(cell.topSpeedDeltaPercent)));
+    const tint = cell => {
+      const t = Math.min(1, Math.abs(cell.topSpeedDeltaPercent) / span);
+      return cell.current ? "" : cell.topSpeedDeltaPercent > 0 ? `background:rgba(38,107,146,${0.08 + 0.32 * t})` : `background:rgba(166,101,22,${0.08 + 0.32 * t})`;
+    };
+    const unit = { topSpeed: "km/h", delta: "% vs current", torque: "N·m at the wheel", ratio: "rear / front", links: `${linkUnit} (* outside adjuster)` }[comboMetric];
+    return `<article class="panel"><div class="panel-title-row"><div><h3>Sprocket combination matrix</h3><p class="panel-intro">Front ±3 by rear ±3 teeth around the current pair. Blue is taller gearing (more top speed), amber is shorter (more wheel torque). Values in ${esc(unit)}.</p></div>
+      <div class="field benchmark-filter"><label for="combo-metric">Show</label><select id="combo-metric" data-combo-metric>${optionList(comboMetrics, comboMetric)}</select></div></div>
+      <div class="table-wrap"><table class="combo-matrix"><thead><tr><th>Front ↓ / Rear →</th>${rears.map(rear => `<th class="numeric">${rear}</th>`).join("")}</tr></thead><tbody>
+        ${o.combos.map(row => `<tr><th>${row[0].front}</th>${row.map(cell => `<td class="numeric ${cell.current ? "current-cell" : ""}" style="${tint(cell)}" title="${cell.front}/${cell.rear} · ratio ${fmt(cell.finalRatio, 3)} · ${fmt(cell.topSpeed, 1)} km/h · ${cell.links ?? "—"} ${linkUnit}">${cellValue(cell)}</td>`).join("")}</tr>`).join("")}
+      </tbody></table></div></article>`;
+  }
+  function proposedPanel(o, linkUnit) {
+    const p = state.powertrain, x = o.proposed, top = o.rows.at(-1);
+    if (!x) return `<article class="panel"><h3>Current vs proposed sprockets</h3><div class="notice warning">Enter a proposed front and rear tooth count (whole numbers of at least 3) that fit at the hardpoints.</div></article>`;
+    const row = (label, current, proposed, delta = "") => `<tr><th>${esc(label)}</th><td class="numeric">${current}</td><td class="numeric"><strong>${proposed}</strong></td><td class="numeric">${delta}</td></tr>`;
+    return `<article class="panel"><h3>Current vs proposed sprockets</h3><div class="table-wrap"><table class="dense"><thead><tr><th></th><th class="numeric">Current</th><th class="numeric">Proposed</th><th class="numeric">Change</th></tr></thead><tbody>
+      ${row("Sprockets", `${p.frontTeeth} / ${p.rearTeeth}`, `${x.front} / ${x.rear}`)}
+      ${row("Final-drive ratio", fmt(o.finalRatio.value, 3), fmt(x.finalRatio, 3), `${signed(x.finalRatioDeltaPercent, 1)}%`)}
+      ${row("Speed @ max RPM, top gear", `${fmt(top.speedAtMaxRpm, 1)} km/h`, `${fmt(x.topSpeed, 1)} km/h`, `${signed(x.topSpeedDeltaPercent, 1)}%`)}
+      ${row("Wheel torque in G1 @ peak", `${fmt(o.rows[0].wheelTorqueAtPeak, 0)} N·m`, `${fmt(o.rows[0].wheelTorqueAtPeak * x.finalRatio / o.finalRatio.value, 0)} N·m`, `${signed(x.wheelTorqueDeltaPercent, 1)}%`)}
+      ${row(`RPM at ${fmt(p.cruiseSpeed, 0)} km/h, top gear`, fmt(x.cruiseRpmTopBaseline, 0), fmt(x.cruiseRpmTop, 0), x.cruiseRpmTop && x.cruiseRpmTopBaseline ? `${signed(x.cruiseRpmTop - x.cruiseRpmTopBaseline, 0)} rpm` : "")}
+      ${row(`Recommended ${linkUnit}`, String(o.recommendedLinks.value), String(x.recommendedLinks), `${signed(x.recommendedLinks - o.recommendedLinks.value, 0)}`)}
+      ${row("Axle move from hardpoint", `${signed(o.axleMove.value, 1)} mm`, `${signed(x.axleMove, 1)} mm`, x.withinAdjuster ? "fits adjuster" : "outside adjuster")}
+      ${row(`Axle move keeping the current ${o.recommendedLinks.value}-${linkUnit === "teeth" ? "tooth belt" : "link chain"}`, "—", x.sameChainAxleMove === null ? "will not fit" : `${signed(x.sameChainAxleMove, 1)} mm`)}
+    </tbody></table></div><p class="diagram-note">Positive axle move is rearward along the drive-centre to axle line. Speed change ignores road load; see Motor sizing for achievable top speed.</p></article>`;
+  }
+
+  // Reference gearbox overlay: read-only, never writes to Transmission or the revision.
   function transmissionReference() {
     const records = window.TRANSMISSION_BENCHMARKS?.records || [];
     return records.find(record => record.id === transmissionReferenceId) || null;
   }
   function projectGearRatios() {
-    const p = state.powertrain;
-    return [p.gear1,p.gear2,p.gear3,p.gear4,p.gear5,p.gear6].map(Number).filter(value => Number.isFinite(value) && value > 0);
+    const p = state.powertrain, count = Math.max(1, Math.min(6, Math.round(Number(p.gearCount) || 6)));
+    return [p.gear1, p.gear2, p.gear3, p.gear4, p.gear5, p.gear6].slice(0, count).map(Number).filter(value => Number.isFinite(value) && value > 0);
   }
   function projectOverall(gearRatio) {
     return Number(state.powertrain.primaryRatio) * gearRatio * (Number(state.powertrain.rearTeeth) / Math.max(1e-9, Number(state.powertrain.frontTeeth)));
   }
-  function referenceOverall(record, gearRatio) {
-    return Number(record.primaryRatio) * gearRatio * Number(record.finalRatio);
-  }
-  function transmissionSelector() {
+  function referenceOverall(record, gearRatio) { return Number(record.primaryRatio) * gearRatio * Number(record.finalRatio); }
+  function transmissionComparisonPanel() {
     const catalogue = window.TRANSMISSION_BENCHMARKS;
-    if (!catalogue?.records?.length) return `<div class="notice danger">No transmission reference catalogue is loaded.</div>`;
+    if (!catalogue?.records?.length) return `<article class="panel"><h3>Reference gearbox</h3><div class="notice danger">No transmission reference catalogue is loaded.</div></article>`;
     const grouped = catalogue.categories.map(category => {
       const items = catalogue.records.filter(record => record.benchmarkCategory === category);
-      if (!items.length) return "";
-      return `<optgroup label="${esc(category)}">${items.map(record => `<option value="${esc(record.id)}" ${record.id === transmissionReferenceId ? "selected" : ""}>${esc(record.label)}</option>`).join("")}</optgroup>`;
+      return items.length ? `<optgroup label="${esc(category)}">${items.map(record => `<option value="${esc(record.id)}" ${record.id === transmissionReferenceId ? "selected" : ""}>${esc(record.label)}</option>`).join("")}</optgroup>` : "";
     }).join("");
-    const record = transmissionReference();
-    return `<div class="local-context" aria-label="Transmission comparison context">
-      <div class="field full"><label for="transmission-reference">Compare transmission against</label>
-        <select id="transmission-reference" data-transmission-reference><option value="">No reference vehicle</option>${grouped}</select>
-        <small>Read-only overlay for the two charts below. Selecting a reference never changes Powertrain values, the duty case or the revision.</small></div>
-      ${record ? `<div class="reference-chip"><strong>${esc(record.label)}</strong><span>${esc(record.benchmarkCategory)}</span><span>${record.gearCount} gears</span><span>primary ${fmt(record.primaryRatio,3)}</span><span>final ${fmt(record.finalRatio,3)}</span><span>${record.frontTeeth}/${record.rearTeeth}T</span><span>${fmt(record.maxRpm,0)} rpm max</span></div>` : ""}
-    </div>`;
-  }
-  function transmissionComparisonPanel() {
-    const record = transmissionReference();
-    const mine = projectGearRatios();
-    const rows = mine.map((gearRatio, index) => {
-      const theirs = record?.gearRatios?.[index];
-      const mineOverall = projectOverall(gearRatio);
-      const theirsOverall = Number.isFinite(theirs) ? referenceOverall(record, theirs) : null;
-      return `<tr><td>${index+1}</td><td class="numeric">${fmt(gearRatio,3)}</td><td class="numeric">${Number.isFinite(theirs)?fmt(theirs,3):"—"}</td><td class="numeric">${Number.isFinite(theirs)?`${theirs-gearRatio>=0?"+":""}${fmt(theirs-gearRatio,3)}`:"—"}</td><td class="numeric">${fmt(mineOverall,3)}</td><td class="numeric">${theirsOverall===null?"—":fmt(theirsOverall,3)}</td></tr>`;
+    const record = transmissionReference(), mine = projectGearRatios();
+    const count = Math.max(mine.length, record?.gearRatios?.length || 0);
+    const rows = Array.from({ length: count }, (_, index) => {
+      const a = mine[index], b = record?.gearRatios?.[index];
+      return `<tr><td>G${index + 1}</td><td class="numeric">${Number.isFinite(a) ? fmt(projectOverall(a), 2) : "—"}</td><td class="numeric">${record && Number.isFinite(b) ? fmt(referenceOverall(record, b), 2) : "—"}</td></tr>`;
     }).join("");
-    const spread = values => values.length > 1 ? values[0] / values.at(-1) : null;
-    const mineSpread = spread(mine), theirsSpread = record ? spread(record.gearRatios) : null;
-    return `<article class="panel"><h3>Transmission comparison</h3>
-      <p class="panel-intro">Your entered ratio stack against the selected reference vehicle. Gear count, primary ratio and final drive all differ between machines, so overall ratio is shown as well as raw gear ratio.</p>
-      ${canvasChart("gearRatioChart","Gear ratio per gear, current model against the selected reference vehicle",300)}
-      <div class="chart-legend"><span><i style="background:#1f6b50"></i>This model</span><span><i style="background:#d75f36"></i>${esc(record?record.label:"No reference selected")}</span></div>
-      <div class="table-wrap" style="margin-top:14px"><table><thead><tr><th>Gear</th><th class="numeric">This model</th><th class="numeric">Reference</th><th class="numeric">Δ ratio</th><th class="numeric">This overall</th><th class="numeric">Reference overall</th></tr></thead><tbody>${rows}</tbody></table></div>
-      <div class="benchmark-project" style="margin-top:12px"><strong>Ratio spread</strong><span>This model ${mineSpread?fmt(mineSpread,3):"—"}</span><span>Reference ${theirsSpread?fmt(theirsSpread,3):"—"}</span>${record?`<span>${mine.length} vs ${record.gearRatios.length} gears</span>`:""}</div>
-      <div class="notice warning" style="margin-top:14px">Descriptive context only. A reference machine is a different vehicle with its own mass, tyre, engine envelope and intended use; ratio proximity never creates an engineering pass.</div></article>`;
-  }
-  function wheelRpmPanel() {
-    const record = transmissionReference();
-    const tyreOut = Core.tyre(state.stance.rearTyreWidth, state.stance.rearTyreAspect, state.stance.rearRim);
-    return `<article class="panel"><h3>Shaft RPM to wheel RPM</h3>
-      <p class="panel-intro">Wheel speed produced per unit of motor or engine speed, through each gear. The slope of every line is the reciprocal of that gear's overall ratio, so a steeper line is a taller gear.</p>
-      ${canvasChart("wheelRpmChart","Wheel RPM against motor or engine RPM for every gear, current model against the selected reference vehicle",340)}
-      <div class="chart-legend"><span><i style="background:#1f6b50"></i>This model — solid</span><span><i style="background:#d75f36"></i>${esc(record?record.label:"No reference selected")} — dashed</span></div>
-      <div class="benchmark-project" style="margin-top:12px"><strong>Tyre reference</strong><span>This model ${tyreOut.ok?fmt(tyreOut.circumference,0):"—"} mm circumference</span>${record?`<span>Reference ${fmt(record.tyre.nominalCircumferenceMm,0)} mm</span>`:""}</div>
-      <div class="notice" style="margin-top:14px">Kinematic only: no slip, no tyre growth, no clutch or torque-converter loss. Reference tyre circumference is nominal and geometric, so real rolling radius will differ.</div></article>`;
+    return `<article class="panel"><div class="panel-title-row"><div><h3>Reference gearbox</h3><p class="panel-intro">Overall ratio per gear against a curated production motorcycle. Read-only context: it never changes Transmission or the revision.</p></div>
+      <div class="field benchmark-filter wide"><label for="transmission-reference">Compare against</label><select id="transmission-reference" data-transmission-reference><option value="">No reference</option>${grouped}</select></div></div>
+      ${record ? `<div class="reference-chip"><strong>${esc(record.label)}</strong><span>${record.gearCount} gears</span><span>primary ${fmt(record.primaryRatio, 3)}</span><span>${record.frontTeeth}/${record.rearTeeth}T</span><span>${fmt(record.maxRpm, 0)} rpm</span></div>` : ""}
+      <div class="grid two compact-grid"><div>${canvasChart("gearRatioChart", "Overall ratio per gear against the selected reference", 240)}${legend([["This design", "#1f6b50"], [record ? record.label : "No reference", "#d75f36"]])}</div>
+      <div class="table-wrap"><table class="dense"><thead><tr><th>Gear</th><th class="numeric">This design</th><th class="numeric">Reference</th></tr></thead><tbody>${rows}</tbody></table></div></div></article>`;
   }
   function drawGearRatioComparison(canvas) {
     if (!canvas) return;
-    const record = transmissionReference();
-    const mine = projectGearRatios();
-    if (!mine.length) return;
-    const theirs = record?.gearRatios || [];
-    const maxGear = Math.max(mine.length, theirs.length);
-    const all = [...mine, ...theirs];
-    const view = drawAxes(canvas, "Gear", "Gear ratio", 0, Math.max(...all) * 1.12);
-    const slot = (view.W - view.pad.l - view.pad.r) / maxGear;
-    const barW = Math.min(26, slot / (record ? 2.6 : 1.8));
+    const record = transmissionReference(), mine = projectGearRatios().map(projectOverall);
+    const theirs = record ? record.gearRatios.map(ratio => referenceOverall(record, ratio)) : [];
+    const count = Math.max(mine.length, theirs.length);
+    if (!count) return;
+    const rect = canvas.getBoundingClientRect(); if (!rect.width) return;
+    const view = drawAxes(canvas, "Gear", "Overall ratio", 0, Math.max(...mine, ...theirs) * 1.15);
+    const slot = (view.W - view.pad.l - view.pad.r) / count, barW = Math.min(26, slot / (record ? 2.6 : 1.8));
     const drawSet = (values, colour, offset) => values.forEach((value, index) => {
-      const centre = view.pad.l + slot * (index + 0.5);
-      const x = centre + offset - barW / 2, y = view.ty(value), base = view.ty(0);
+      const x = view.pad.l + slot * (index + 0.5) + offset - barW / 2, y = view.ty(value), base = view.ty(0);
       view.ctx.fillStyle = colour; view.ctx.fillRect(x, y, barW, base - y);
-      view.ctx.fillStyle = colour; view.ctx.font = "700 10px Inter, system-ui"; view.ctx.textAlign = "center";
-      view.ctx.fillText(fmt(value,2), x + barW/2, y - 5);
+      view.ctx.font = "700 10px Inter, system-ui"; view.ctx.textAlign = "center"; view.ctx.fillText(fmt(value, 2), x + barW / 2, y - 5);
     });
-    drawSet(mine, "#1f6b50", record ? -barW*0.62 : 0);
-    if (record) drawSet(theirs, "#d75f36", barW*0.62);
+    drawSet(mine, "#1f6b50", record ? -barW * 0.62 : 0);
+    if (record) drawSet(theirs, "#d75f36", barW * 0.62);
     view.ctx.fillStyle = "#61717b"; view.ctx.font = "10px Inter, system-ui"; view.ctx.textAlign = "center";
-    for (let index = 0; index < maxGear; index += 1) view.ctx.fillText(String(index+1), view.pad.l + slot*(index+0.5), view.H - view.pad.b + 16);
+    for (let index = 0; index < count; index += 1) view.ctx.fillText(`G${index + 1}`, view.pad.l + slot * (index + 0.5), view.H - view.pad.b + 16);
     view.ctx.textAlign = "left";
   }
-  function drawWheelRpmComparison(canvas) {
-    if (!canvas) return;
-    const powertrain = outputs.powertrain;
-    if (!powertrain?.ok) return;
-    const record = transmissionReference();
-    const mineMaxRpm = Number(state.powertrain.maxRpm);
-    const maxRpm = Math.max(mineMaxRpm, record ? Number(record.maxRpm) : 0);
-    const mineSeries = powertrain.rows.map(row => ({ ratio: row.overallRatio, gear: row.gear }));
-    const theirsSeries = record ? record.gearRatios.map((gearRatio, index) => ({ ratio: referenceOverall(record, gearRatio), gear: index+1 })) : [];
-    const wheelRpmAt = (rpm, ratio) => rpm / ratio;
-    const peak = Math.max(
-      ...mineSeries.map(item => wheelRpmAt(mineMaxRpm, item.ratio)),
-      ...theirsSeries.map(item => wheelRpmAt(Number(record.maxRpm), item.ratio))
-    );
-    const view = drawAxes(canvas, "Motor / engine RPM", "Wheel RPM", 0, peak * 1.08);
-    const line = (series, limitRpm, colour, dashed) => series.forEach(item => {
-      view.ctx.strokeStyle = colour; view.ctx.lineWidth = dashed ? 1.8 : 2.6;
-      view.ctx.setLineDash(dashed ? [6,4] : []);
-      view.ctx.beginPath();
-      view.ctx.moveTo(view.tx(0, maxRpm), view.ty(0));
-      view.ctx.lineTo(view.tx(limitRpm, maxRpm), view.ty(wheelRpmAt(limitRpm, item.ratio)));
-      view.ctx.stroke();
-      view.ctx.setLineDash([]);
-      view.ctx.fillStyle = colour; view.ctx.font = "700 9px Inter, system-ui"; view.ctx.textAlign = "right";
-      view.ctx.fillText(`G${item.gear}`, view.tx(limitRpm, maxRpm) - 3, view.ty(wheelRpmAt(limitRpm, item.ratio)) - 4);
+  function drawSpeedRpm(canvas) {
+    const o = outputs.powertrain; if (!o?.ok) return;
+    const gearCount = o.rows.length, cruise = Number(state.powertrain.cruiseSpeed);
+    xyChart(canvas, {
+      xLabel: "Motor RPM", yLabel: "Road speed (km/h)", xMax: Number(state.powertrain.maxRpm),
+      series: o.rows.map(row => ({ data: row.curve.map(point => [point.rpm, point.speed]), colour: SERIES_COLOURS[row.gear - 1], endLabel: gearCount === 1 ? "" : `G${row.gear}` })),
+      hLines: cruise > 0 ? [{ y: cruise, label: `${fmt(cruise, 0)} km/h`, colour: "#8f9b97" }] : []
     });
-    if (record) line(theirsSeries, Number(record.maxRpm), "#d75f36", true);
-    line(mineSeries, mineMaxRpm, "#1f6b50", false);
-    view.ctx.textAlign = "left";
+  }
+
+  // ---- Motor sizing ------------------------------------------------------------------------
+  function renderMotor(tab) {
+    const o = outputs.motor, m = state.motor, p = state.powertrain, pt = outputs.powertrain, ok = o?.ok === true;
+    const masses = outputs.massProperties, rearTyre = Core.tyre(state.stance.rearTyreWidth, state.stance.rearTyreAspect, state.stance.rearRim);
+    const linked = m.ratioSource !== "manual";
+    const tiles = ok ? [
+      kpi("Peak torque", o.peakTorque, 1, `set by ${o.governing.label}`),
+      kpi("Peak power", o.peakPower, 1, `at ${fmt(o.baseRpm.value, 0)} rpm`),
+      kpi("Base RPM", o.baseRpm, 0, `CPSR ${fmt(m.constantPowerRatio, 2)}`),
+      kpi("Max RPM", o.maxRpm, 0, `${fmt(m.targetTopSpeed, 0)} km/h, tallest ratio`),
+      kpi("Launch wheel torque", o.launchWheelTorque, 0, `${fmt(o.launchAccel.value, 2)} g uncapped`),
+      kpi("Grade torque", o.gradeTorque, 1, o.gradePower.value === null ? "no grade target" : `${fmt(o.gradePower.value, 1)} kW continuous`)
+    ] : [];
+    const ratioRows = linked ? (pt?.ok ? pt.rows.map(row => [pt.rows.length === 1 ? "Overall ratio" : `G${row.gear} overall`, fmt(row.overallRatio, 3), ""]) : [["Overall ratios", "Transmission unavailable", ""]]) : [];
+    const req = ok ? o.requirements.map(item => `<tr class="${item.id === o.governing.id ? "governs" : ""}"><td>${esc(item.label)}</td><td class="numeric">${fmt(item.torque, 1)} N·m</td><td class="numeric">${fmt(item.torque * o.baseRpm.value * 2 * Math.PI / 60 / 1000, 1)} kW</td><td>${item.id === o.governing.id ? "<strong>governs</strong>" : ""}</td></tr>`).join("") : "";
+    const c = ok ? o.committed : null;
+    const cmp = (label, target, achieved, unit, digits, better) => {
+      const delta = Number.isFinite(target) && Number.isFinite(achieved) ? achieved - target : null;
+      const meets = delta === null || !better ? null : better === "lower" ? delta <= 1e-9 : delta >= -1e-9;
+      return `<tr><th>${esc(label)}</th><td class="numeric">${Number.isFinite(target) ? `${fmt(target, digits)} ${unit}` : "—"}</td><td class="numeric">${Number.isFinite(achieved) ? `${fmt(achieved, digits)} ${unit}` : "—"}</td><td class="numeric ${meets === false ? "over" : ""}">${delta === null ? "—" : `${signed(delta, digits)}`}</td></tr>`;
+    };
+    const comparison = ok && c ? `<div class="table-wrap"><table class="dense"><thead><tr><th></th><th class="numeric">Required / target</th><th class="numeric">Committed motor</th><th class="numeric">Δ</th></tr></thead><tbody>
+      ${cmp("Peak torque", o.peakTorque.value, c.peakTorque, "N·m", 1)}
+      ${cmp("Peak power", o.peakPower.value, c.peakPowerKw, "kW", 1)}
+      ${cmp("Base RPM", o.baseRpm.value, c.baseRpm, "rpm", 0)}
+      ${cmp("Max RPM", o.maxRpm.value, c.maxRpm, "rpm", 0)}
+      ${cmp("0–60 km/h", Number(m.target0to60) || null, c.times[60], "s", 2, "lower")}
+      ${cmp("0–100 km/h", Number(m.target0to100) || null, c.times[100], "s", 2, "lower")}
+      ${cmp("Top speed (road load)", Number(m.targetTopSpeed), c.topSpeed, "km/h", 1, "higher")}
+      ${cmp(`Gradeability at ${fmt(m.gradeSpeed, 0)} km/h`, Number(m.gradePercent) || null, c.gradeability, "%", 1, "higher")}
+    </tbody></table></div><p class="diagram-note">Judge the committed motor by the performance rows: red Δ means it falls short of that target. Torque, power and RPM rows are informational, because a different envelope shape (base speed) can meet the same targets. Gradeability is tractive only; tyre grip and wheelie on steep grades are not evaluated.</p>` : (ok ? `<div class="notice warning">The committed envelope is incomplete; enter peak torque, base and max RPM below.</div>` : "");
+    return `<section class="view ${activeTab === tab.id ? "active" : ""}" id="view-${tab.id}">${viewHead(tab)}
+      ${kpiStrip("motor", tiles)}${invalidNotice(o, "Motor sizing")}
+      <div class="grid two">
+        <div>
+          <article class="panel"><h3>Performance targets</h3><div class="fields">
+            ${input("motor.targetTopSpeed", "Max speed", "km/h")}
+            ${input("motor.gradePercent", "Inclination", "%", { help: `${fmt(Math.atan(Number(m.gradePercent) / 100) * 180 / Math.PI, 1)}°` })}
+            ${input("motor.gradeSpeed", "Speed on inclination", "km/h")}
+            ${input("motor.target0to60", "0–60 km/h", "s", { step: "0.1", help: "0 skips this target" })}
+            ${input("motor.target0to100", "0–100 km/h", "s", { step: "0.1", help: "0 skips this target" })}
+            ${input("motor.wheelieCap", "Cap launch at wheelie limit", "", { type: "select", values: [{ value: "yes", label: "Yes · anti-wheelie" }, { value: "no", label: "No · uncapped" }] })}
+          </div>
+          <h4 class="subhead">Motor model</h4><div class="fields">
+            ${input("motor.constantPowerRatio", "Constant-power speed ratio", "max/base", { step: "0.1", help: "Typical PMSM 2–3.5" })}
+            ${input("motor.inertiaFactor", "Rotating-mass factor", "×", { step: "0.01" })}
+          </div></article>
+          <article class="panel"><h3>Transmission ratio</h3><div class="fields">
+            ${input("motor.ratioSource", "Ratio source", "", { type: "select", full: true, values: [{ value: "linked", label: "Linked · overall ratios from the Transmission tab" }, { value: "manual", label: "Manual · single overall ratio" }] })}
+            ${linked ? "" : input("motor.manualRatio", "Overall ratio", "motor : wheel", { step: "0.01", full: true, help: "Single-speed overall reduction, e.g. 9.91" })}
+          </div>
+          ${linked ? linkedList(ratioRows.map(([label, value]) => [label, value, ""]).concat([["Source", sourceTag("powertrain"), ""]])) : ""}
+          <h4 class="subhead">Linked vehicle</h4>
+          ${linkedList([
+            ["Mass", masses?.ok ? `${fmt(masses.totalMass, 1)} kg` : "—", `${state.meta.loadCase} · mass properties`],
+            ["CdA / Crr / ρ", `${fmt(state.vehicle.dragCoefficientArea, 2)} m² · ${fmt(state.vehicle.rollingResistance, 3)} · ${fmt(state.vehicle.airDensity, 3)}`, "Vehicle calculators"],
+            ["Rear tyre radius", rearTyre.ok ? `${fmt(rearTyre.radius, 1)} mm` : "—", sourceTag("stance")],
+            ["Driveline efficiency", fmt(p.drivelineEfficiency, 2), "Transmission"],
+            ["Wheelie limit", ok ? `${fmt(o.wheelieLimit.value, 2)} g` : "—", "linked CG"]
+          ])}</article>
+          <article class="panel"><h3>Committed motor envelope</h3><p class="panel-intro">The motor the rest of the model uses: Transmission, Anti-squat, Battery and Energy & E/E read these values.</p><div class="fields">
+            ${input("powertrain.type", "Powertrain type", "", { type: "select", values: ["Electric", "ICE"] })}
+            ${input("powertrain.maxTorque", "Peak torque", "N·m")}
+            ${input("powertrain.baseRpm", "Base RPM", "rpm")}
+            ${input("powertrain.maxRpm", "Max RPM", "rpm")}
+            ${input("powertrain.motorEfficiency", "Motor efficiency", "fraction", { step: "0.01" })}
+            ${input("powertrain.inverterEfficiency", "Inverter efficiency", "fraction", { step: "0.01" })}
+            ${input("powertrain.provenance", "Provenance", "", { type: "text", full: true })}
+          </div>
+          ${ok ? `<button class="button primary" type="button" data-action="apply-motor" style="margin-top:14px">Apply required motor · ${fmt(o.proposal.maxTorque, 0)} N·m, ${fmt(o.proposal.baseRpm, 0)} / ${fmt(o.proposal.maxRpm, 0)} rpm</button><p class="diagram-note">Writes peak torque (rounded up), base and max RPM into the committed envelope and creates a new revision. If the named duty point would fall outside the new envelope it is clamped onto it, and the change log says so.</p>` : ""}</article>
+          <article class="panel"><h3>Named duty case</h3>${dutyCaseControl(false)}<div class="fields" style="margin-top:12px">
+            ${input("powertrain.dutyTorque", "Duty torque", "N·m")}
+            ${input("powertrain.dutyRpm", "Duty RPM", "rpm")}
+            ${input("powertrain.dutyDurationMinutes", "Duty duration", "min", { step: "0.5" })}
+            ${input("powertrain.dutyGear", "Duty gear", "gear")}
+          </div>
+          <div class="kpi-mini">${pt?.ok ? [kpi("Duty shaft power", pt.shaftPower, 2), kpi("Duty energy", pt.dutyEnergy, 2), kpi("Duty road speed", pt.dutyRoadSpeed, 1), kpi("Committed peak power", pt.peakPower, 1)].join("") : invalidNotice(pt, "Duty case")}</div></article>
+        </div>
+        <div>
+          <article class="panel"><h3>What sets the motor</h3>${ok ? `<div class="table-wrap"><table class="dense"><thead><tr><th>Target</th><th class="numeric">Peak torque needed</th><th class="numeric">Peak power</th><th></th></tr></thead><tbody>${req}</tbody></table></div><p class="diagram-note">${esc(DATA.sourceNotes.motorSizing)}</p>` : ""}</article>
+          <article class="panel"><h3>Required vs committed</h3>${comparison}</article>
+          <article class="panel"><h3>Motor torque & power vs RPM</h3>${canvasChart("motorEnvelopeChart", "Required and committed motor torque and power against motor RPM", 300)}${legend([["Required torque", "#1f6b50"], ["Required power", "#1f6b50", true], ["Committed torque", "#d75f36"], ["Committed power", "#d75f36", true]])}</article>
+          <article class="panel"><h3>Wheel torque vs road speed</h3><p class="panel-intro">Motor torque × overall ratio × efficiency for every gear, against the road-load torque it has to beat.</p>${canvasChart("wheelTorqueChart", "Wheel torque per gear against road speed with road-load torque", 320)}${legend(wheelLegend(o))}</article>
+          <article class="panel"><h3>Wheel power vs road speed</h3>${canvasChart("wheelPowerChart", "Wheel power per gear against road speed with road-load power", 300)}${legend(wheelLegend(o))}</article>
+          <article class="panel"><h3>Speed vs time</h3>${canvasChart("accelChart", "Road speed against time for required and committed motors", 280)}${legend([["Required motor", "#1f6b50"], ["Committed motor", "#d75f36"], ["Targets", "#6e56a0"]])}</article>
+          <article class="panel"><h3>Torque vs power</h3><p class="panel-intro">The motor operating envelope traced from 0 to max RPM, with the grade and top-speed duty points it has to cover.</p>${canvasChart("torquePowerChart", "Motor torque against motor power along the envelope", 280)}${legend([["Required envelope", "#1f6b50"], ["Committed envelope", "#d75f36"], ["Duty points", "#6e56a0"]])}</article>
+        </div>
+      </div>
+      ${powertrainBenchmarkPanel()}
+    </section>`;
+  }
+  function wheelLegend(o) {
+    const gears = o?.ok && o.committed ? o.ratios.map((_, index) => [o.ratios.length === 1 ? "Committed motor" : `G${index + 1} committed`, o.ratios.length === 1 ? "#d75f36" : SERIES_COLOURS[index]]) : [];
+    return gears.concat([["Required envelope", "#1f6b50", true], ["Road load, level", "#8f9b97", true], [`Road load, ${fmt(state.motor.gradePercent, 0)}%`, "#b84d56", true]]);
+  }
+  function drawMotorCharts() {
+    const o = outputs.motor; if (!o?.ok) return;
+    const cv = o.curves;
+    xyChart(document.querySelector("#motorEnvelopeChart"), {
+      xLabel: "Motor RPM", yLabel: "Torque (N·m)", y2Label: "Power (kW)",
+      series: [
+        { data: cv.motor.map(p => [p.rpm, p.requiredTorque]), colour: "#1f6b50" },
+        { data: cv.motor.map(p => [p.rpm, p.committedTorque]), colour: "#d75f36" },
+        { data: cv.motor.map(p => [p.rpm, p.requiredPower]), colour: "#1f6b50", dash: [7, 5], axis: "y2" },
+        { data: cv.motor.map(p => [p.rpm, p.committedPower]), colour: "#d75f36", dash: [7, 5], axis: "y2" }
+      ],
+      vLines: [{ x: o.baseRpm.value, label: "base", colour: "#1f6b50" }]
+    });
+    const gearColour = gear => cv.committedGears.length === 1 ? "#d75f36" : SERIES_COLOURS[gear - 1];
+    const gearSeries = key => cv.committedGears.map(gear => ({ data: gear.points.map(p => [p.speed, p[key]]), colour: gearColour(gear.gear), width: 2.2 }));
+    const xMax = cv.road.at(-1).speed;
+    xyChart(document.querySelector("#wheelTorqueChart"), {
+      xLabel: "Road speed (km/h)", yLabel: "Wheel torque (N·m)", xMax,
+      series: [...gearSeries("wheelTorque"), { data: cv.requiredEnvelope.map(p => [p.speed, p.wheelTorque]), colour: "#1f6b50", dash: [7, 5], width: 2.6 }, { data: cv.road.map(p => [p.speed, p.levelTorque]), colour: "#8f9b97", dash: [4, 4] }, { data: cv.road.map(p => [p.speed, p.gradeTorque]), colour: "#b84d56", dash: [4, 4] }],
+      vLines: [{ x: Number(state.motor.targetTopSpeed), label: "max speed", colour: "#6e56a0" }]
+    });
+    xyChart(document.querySelector("#wheelPowerChart"), {
+      xLabel: "Road speed (km/h)", yLabel: "Wheel power (kW)", xMax,
+      series: [...gearSeries("wheelPower"), { data: cv.requiredEnvelope.map(p => [p.speed, p.wheelPower]), colour: "#1f6b50", dash: [7, 5], width: 2.6 }, { data: cv.road.map(p => [p.speed, p.levelPower]), colour: "#8f9b97", dash: [4, 4] }, { data: cv.road.map(p => [p.speed, p.gradePower]), colour: "#b84d56", dash: [4, 4] }],
+      vLines: [{ x: Number(state.motor.targetTopSpeed), label: "max speed", colour: "#6e56a0" }]
+    });
+    const targets = [[60, Number(state.motor.target0to60)], [100, Number(state.motor.target0to100)]].filter(([, t]) => t > 0);
+    xyChart(document.querySelector("#accelChart"), {
+      xLabel: "Time (s)", yLabel: "Road speed (km/h)",
+      series: [{ data: cv.requiredRun.map(p => [p.t, p.v * 3.6]), colour: "#1f6b50" }, { data: cv.committedRun.map(p => [p.t, p.v * 3.6]), colour: "#d75f36" }],
+      hLines: [{ y: 60, label: "60", colour: "#c3cbc6" }, { y: 100, label: "100", colour: "#c3cbc6" }],
+      points: targets.map(([kmh, t]) => ({ x: t, y: kmh, colour: "#6e56a0", label: `${t} s target` }))
+    });
+    const trace = key => cv.motor.map(p => [p[`${key}Power`], p[`${key}Torque`]]);
+    xyChart(document.querySelector("#torquePowerChart"), {
+      xLabel: "Motor power (kW)", yLabel: "Motor torque (N·m)",
+      series: [{ data: trace("required"), colour: "#1f6b50" }, { data: trace("committed"), colour: "#d75f36" }],
+      points: [
+        cv.gradePoint ? { x: cv.gradePoint.powerKw, y: cv.gradePoint.motorTorque, colour: "#6e56a0", label: "grade" } : null,
+        { x: cv.vMaxPoint.powerKw, y: cv.vMaxPoint.torque, colour: "#6e56a0", label: "max speed", align: "right" }
+      ].filter(Boolean)
+    });
+  }
+
+  // ---- Braking -----------------------------------------------------------------------------
+  function brakeHardwarePanel(side) {
+    const cat = DATA.brakeCatalogue, o = outputs.braking, ok = o?.ok === true;
+    const isFront = side === "front", hw = ok ? o[side] : null;
+    return `<article class="panel"><h3>${isFront ? "Front brake" : "Rear brake"}</h3><div class="fields">
+      ${input(`braking.${side}LeverRatio`, isFront ? "Hand-lever ratio" : "Foot-pedal ratio", "ratio", { step: "0.01" })}
+      ${stdField(`braking.${side}McBore`, "Master cylinder bore", "mm", cat.mcBore, { step: "0.01" })}
+      ${stdField(`braking.${side}PistonDia`, "Caliper piston diameter", "mm", cat.pistonDia)}
+      ${stdField(`braking.${side}PistonCount`, "Pistons per caliper", "", cat.pistonCount)}
+      ${stdField(`braking.${side}Architecture`, "Caliper architecture", "", cat.architecture.map(item => ({ value: item.value, label: item.label })), { noCustom: true })}
+      ${stdField(`braking.${side}PadFriction`, "Pad compound", "μ", cat.padFriction, { step: "0.005" })}
+      ${stdField(`braking.${side}DiscOd`, "Disc outer diameter", "mm", cat.discOd)}
+      ${input(`braking.${side}PadHeight`, "Pad radial height", "mm", { step: "0.25" })}
+      ${input(`braking.${side}HydraulicEfficiency`, "Hydraulic efficiency", "fraction", { step: "0.01" })}
+    </div>
+    ${linkedList([
+      ["Effective disc radius", hw ? `${fmt(hw.effectiveRadius, 2)} mm` : "—", "OD/2 − pad height/2"],
+      ["Piston area per pad face", hw ? `${fmt(hw.pistonArea, 1)} mm²` : "—", state.braking[`${side}Architecture`] === "floating" ? "floating: every piston pushes one face" : "opposed: half the pistons per face"],
+      ["Master cylinder area", hw ? `${fmt(hw.mcArea, 1)} mm²` : "—", ""]
+    ])}</article>`;
+  }
+  function renderBraking(tab) {
+    const o = outputs.braking, b = state.braking, ok = o?.ok === true;
+    const s = ok ? o.solo : null, d = ok ? o.duals : null;
+    const tiles = ok ? [
+      kpi("Front-only max decel", o.frontOnlyDecel, 3, s.frontOnlyStoppieLimited ? "stoppie-limited" : `rear-only ${fmt(s.rearOnly, 3)} g`),
+      kpi(`Stop from ${fmt(b.testSpeed, 0)} km/h`, o.stopFront, 1, `front only · combined ${fmt(s.stopCombined, 1)} m`),
+      kpi("Lever @ front lock-up", o.leverLockup, 2, `duals ${fmt(d.front.inputKg, 2)} kgf`),
+      kpi("Pedal @ rear lock-up", o.pedalLockup, 2, `duals ${fmt(d.rear.inputKg, 2)} kgf`),
+      kpi("Front line pressure", o.frontPressure, 1, `rear ${fmt(s.rear.pressureBar, 1)} bar`),
+      kpi(`Lever @ ${fmt(b.targetDecel, 2)} g`, { value: s.targetFront.inputKg, unit: "kgf", definition: "Hand-lever force for the target deceleration with the ideal front/rear split" }, 2, `pedal ${fmt(s.targetRear.inputKg, 2)} kgf · ideal split`)
+    ] : [];
+    const row = (label, a, bb, unit = "", digits = 1) => `<tr><th>${esc(label)}</th><td class="numeric">${typeof a === "string" ? a : fmt(a, digits)}${unit ? ` <small>${unit}</small>` : ""}</td><td class="numeric">${typeof bb === "string" ? bb : fmt(bb, digits)}${unit ? ` <small>${unit}</small>` : ""}</td></tr>`;
+    const section = label => `<tr class="section-row"><th colspan="3">${esc(label)}</th></tr>`;
+    const results = ok ? `<div class="table-wrap"><table class="dense"><thead><tr><th></th><th class="numeric">Solo</th><th class="numeric">Rider + pillion</th></tr></thead><tbody>
+      ${section(`Load transfer at ${fmt(b.targetDecel, 2)} g`)}
+      ${row("Rear static share φ", s.phi, d.phi, "", 3)}
+      ${row("CG height / wheelbase χ", s.x, d.x, "", 3)}
+      ${row("Dynamic front load", s.dynamicFrontKg, d.dynamicFrontKg, "kg")}
+      ${row("Dynamic rear load", s.dynamicRearKg, d.dynamicRearKg, "kg")}
+      ${row("Stoppie threshold", s.stoppie, d.stoppie, "g", 3)}
+      ${section(`Adhesion limits at μ ${fmt(b.roadFriction, 2)}`)}
+      ${row("Front only", `${fmt(s.frontOnly, 3)} g · ${fmt(s.frontOnly * 9.80665, 2)}`, `${fmt(d.frontOnly, 3)} g · ${fmt(d.frontOnly * 9.80665, 2)}`, "m/s²")}
+      ${row("Rear only", `${fmt(s.rearOnly, 3)} g · ${fmt(s.rearOnly * 9.80665, 2)}`, `${fmt(d.rearOnly, 3)} g · ${fmt(d.rearOnly * 9.80665, 2)}`, "m/s²")}
+      ${section(`Stopping distance from ${fmt(b.testSpeed, 0)} km/h`)}
+      ${row("Front only", s.stopFront, d.stopFront, "m", 2)}
+      ${row("Rear only", s.stopRear, d.stopRear, "m", 2)}
+      ${row("Both wheels at μ", s.stopCombined, d.stopCombined, "m", 2)}
+      ${section("At the adhesion limit")}
+      ${row("Front wheel torque", s.frontTorque, d.frontTorque, "N·m", 0)}
+      ${row("Rear wheel torque", s.rearTorque, d.rearTorque, "N·m", 0)}
+      ${row("Front clamp force", s.front.clamp, d.front.clamp, "N", 0)}
+      ${row("Rear clamp force", s.rear.clamp, d.rear.clamp, "N", 0)}
+      ${row("Front line pressure", s.front.pressureBar, d.front.pressureBar, "bar")}
+      ${row("Rear line pressure", s.rear.pressureBar, d.rear.pressureBar, "bar")}
+      ${row("Hand-lever force @ lock-up", s.front.inputKg, d.front.inputKg, "kgf", 2)}
+      ${row("Foot-pedal force @ lock-up", s.rear.inputKg, d.rear.inputKg, "kgf", 2)}
+      ${section(`Target ${fmt(b.targetDecel, 2)} g with the ideal split`)}
+      ${row("Front share of braking", s.targetFrontShare * 100, d.targetFrontShare * 100, "%")}
+      ${row("Hand-lever force", s.targetFront.inputKg, d.targetFront.inputKg, "kgf", 2)}
+      ${row("Foot-pedal force", s.targetRear.inputKg, d.targetRear.inputKg, "kgf", 2)}
+    </tbody></table></div>` : "";
+    const slip = ok ? `<div class="table-wrap"><table class="dense"><thead><tr><th>μ</th><th class="numeric">Front, solo</th><th class="numeric">Rear, solo</th><th class="numeric">Front, duals</th><th class="numeric">Rear, duals</th></tr></thead><tbody>${s.slipTable.map((item, index) => `<tr><td>${fmt(item.mu, 1)}</td><td class="numeric">${fmt(item.front, 0)}</td><td class="numeric">${fmt(item.rear, 0)}</td><td class="numeric">${fmt(d.slipTable[index].front, 0)}</td><td class="numeric">${fmt(d.slipTable[index].rear, 0)}</td></tr>`).join("")}</tbody></table></div><p class="diagram-note">Maximum braking force (N) each wheel can carry when both wheels brake at the same μ.</p>` : "";
+    const vehicleRows = ok ? `<div class="table-wrap"><table class="dense"><thead><tr><th></th><th class="numeric">Solo</th><th class="numeric">Rider + pillion</th></tr></thead><tbody>
+      ${row("Total mass", s.mass, d.mass, "kg")}
+      ${row("Front / rear static", `${fmt(s.frontKg, 1)} / ${fmt(s.rearKg, 1)}`, `${fmt(d.frontKg, 1)} / ${fmt(d.rearKg, 1)}`, "kg")}
+      ${row("CG height above ground", s.cgHeight, d.cgHeight, "mm")}
+      ${row("Wheelbase", s.wheelbase, d.wheelbase, "mm", 0)}
+      ${row("Tyre radius F / R", `${fmt(s.frontRadius, 1)} / ${fmt(s.rearRadius, 1)}`, `${fmt(d.frontRadius, 1)} / ${fmt(d.rearRadius, 1)}`, "mm")}
+    </tbody></table></div><p class="diagram-note">Linked from mass properties and Stance (${sourceTag("stance")}). Pillion mass is entered on Stance; with no pillion the two columns match.</p>` : "";
+    return `<section class="view ${activeTab === tab.id ? "active" : ""}" id="view-${tab.id}">${viewHead(tab)}
+      ${kpiStrip("braking", tiles)}${invalidNotice(o, "Braking")}
+      <div class="grid two">
+        <div>
+          <article class="panel"><h3>Test conditions</h3><div class="fields">
+            ${input("braking.roadFriction", "Tyre–road friction μ", "μ", { step: "0.05" })}
+            ${input("braking.targetDecel", "Target deceleration", "g", { step: "0.05" })}
+            ${input("braking.testSpeed", "Test speed", "km/h")}
+            ${input("braking.freeRunCoefficient", "Free-run coefficient", "m per km/h", { step: "0.01", help: `${fmt(Number(b.freeRunCoefficient) * Number(b.testSpeed), 1)} m at ${fmt(b.testSpeed, 0)} km/h (homologation s = c·V + v²/2a)` })}
+          </div></article>
+          ${brakeHardwarePanel("front")}
+          ${brakeHardwarePanel("rear")}
+          <article class="panel"><h3>Linked vehicle</h3>${vehicleRows}</article>
+        </div>
+        <div>
+          <article class="panel"><h3>Results</h3>${results}<p class="diagram-note">${esc(DATA.sourceNotes.braking)}</p></article>
+          <article class="panel"><h3>Ideal brake-force distribution</h3><p class="panel-intro">Front vs rear braking force when both wheels are at the same μ (parabola), with the μ ${fmt(b.roadFriction, 2)} front-lock and rear-lock lines and the ${fmt(b.targetDecel, 2)} g iso-deceleration line.</p>${canvasChart("brakeDistributionChart", "Ideal front and rear braking force distribution", 340)}${legend([["Ideal, solo", "#1f6b50"], ["Ideal, rider + pillion", "#266b92"], ["Front lock (solo)", "#b84d56", true], ["Rear lock (solo)", "#a66516", true], ["Target deceleration", "#6e56a0", true]])}</article>
+          <article class="panel"><h3>Lever & pedal effort vs deceleration</h3>${canvasChart("brakeEffortChart", "Hand-lever and foot-pedal force against deceleration", 280)}${legend([["Lever, front only, solo", "#1f6b50"], ["Lever, duals", "#1f6b50", true], ["Pedal, rear only, solo", "#a66516"], ["Pedal, duals", "#a66516", true]])}</article>
+          <article class="panel"><h3>Line pressure vs deceleration</h3>${canvasChart("brakePressureChart", "Master-cylinder pressure against deceleration", 280)}${legend([["Front, solo", "#266b92"], ["Front, duals", "#266b92", true], ["Rear, solo", "#b84d56"], ["Rear, duals", "#b84d56", true]])}</article>
+          <article class="panel"><h3>Stopping distance vs speed</h3>${canvasChart("brakeStopChart", "Stopping distance against initial speed", 280)}${legend([["Front only", "#266b92"], ["Rear only", "#b84d56"], ["Both at μ", "#1f6b50"], ["Rider + pillion", "#61717b", true]])}</article>
+          <article class="panel"><h3>Maximum slip force by μ</h3>${slip}</article>
+        </div>
+      </div>
+    </section>`;
+  }
+  function drawBrakingCharts() {
+    const o = outputs.braking; if (!o?.ok) return;
+    const s = o.solo, d = o.duals, b = state.braking;
+    const rearLockLine = c => { const atZero = c.curves.rearLock.atZeroFront, slope = c.curves.rearLock.slope; const frontEnd = atZero / -slope; return [[0, atZero], [frontEnd, 0]]; };
+    const fMax = Math.max(s.curves.ideal.at(-1).front, d.curves.ideal.at(-1).front, s.curves.isoDecel, d.curves.isoDecel) * 1.05;
+    xyChart(document.querySelector("#brakeDistributionChart"), {
+      xLabel: "Front braking force (N)", yLabel: "Rear braking force (N)", xMax: fMax,
+      series: [
+        { data: s.curves.ideal.map(p => [p.front, p.rear]), colour: "#1f6b50" },
+        { data: d.curves.ideal.map(p => [p.front, p.rear]), colour: "#266b92" },
+        { data: s.curves.frontLock.map(p => [p.front, p.rear]), colour: "#b84d56", dash: [6, 4] },
+        { data: rearLockLine(s), colour: "#a66516", dash: [6, 4] },
+        { data: [[0, s.curves.isoDecel], [s.curves.isoDecel, 0]], colour: "#6e56a0", dash: [3, 4] }
+      ],
+      yExtra: [Math.max(...s.curves.ideal.map(p => p.rear), ...d.curves.ideal.map(p => p.rear), s.curves.rearLock.atZeroFront) * 1.4],
+      points: s.slipTable.filter(item => [0.3, 0.6, 0.9].includes(item.mu)).map(item => ({ x: item.front, y: item.rear, colour: "#1f6b50", r: 3.5, label: `μ ${item.mu}` }))
+    });
+    const e = c => c.curves.effort;
+    xyChart(document.querySelector("#brakeEffortChart"), {
+      xLabel: "Deceleration (g)", yLabel: "Input force (kgf)",
+      series: [
+        { data: e(s).map(p => [p.frontDecel, p.lever]), colour: "#1f6b50" }, { data: e(d).map(p => [p.frontDecel, p.lever]), colour: "#1f6b50", dash: [6, 4] },
+        { data: e(s).map(p => [p.rearDecel, p.pedal]), colour: "#a66516" }, { data: e(d).map(p => [p.rearDecel, p.pedal]), colour: "#a66516", dash: [6, 4] }
+      ]
+    });
+    xyChart(document.querySelector("#brakePressureChart"), {
+      xLabel: "Deceleration (g)", yLabel: "Line pressure (bar)",
+      series: [
+        { data: e(s).map(p => [p.frontDecel, p.frontBar]), colour: "#266b92" }, { data: e(d).map(p => [p.frontDecel, p.frontBar]), colour: "#266b92", dash: [6, 4] },
+        { data: e(s).map(p => [p.rearDecel, p.rearBar]), colour: "#b84d56" }, { data: e(d).map(p => [p.rearDecel, p.rearBar]), colour: "#b84d56", dash: [6, 4] }
+      ]
+    });
+    const st = c => c.curves.stopping;
+    xyChart(document.querySelector("#brakeStopChart"), {
+      xLabel: "Initial speed (km/h)", yLabel: "Stopping distance (m)",
+      series: [
+        { data: st(s).map(p => [p.speed, p.front]), colour: "#266b92" }, { data: st(s).map(p => [p.speed, p.rear]), colour: "#b84d56" }, { data: st(s).map(p => [p.speed, p.combined]), colour: "#1f6b50" },
+        { data: st(d).map(p => [p.speed, p.front]), colour: "#266b92", dash: [6, 4], width: 1.6 }, { data: st(d).map(p => [p.speed, p.rear]), colour: "#b84d56", dash: [6, 4], width: 1.6 }, { data: st(d).map(p => [p.speed, p.combined]), colour: "#1f6b50", dash: [6, 4], width: 1.6 }
+      ],
+      vLines: [{ x: Number(b.testSpeed), label: `${fmt(b.testSpeed, 0)} km/h`, colour: "#6e56a0" }]
+    });
   }
 
   function powertrainBenchmarkPanel() {
@@ -794,18 +1295,6 @@
     prependPanel(antiRight,"Anti-squat construction",antiSquatDiagram(),"Drive line, sprocket pitch circles, swingarm, loaded CG and 100% reference.");
     const sagRight=document.querySelector("#view-sag .grid.two > div");
     prependPanel(sagRight,"Loaded motorcycle construction",sagDiagram(),"Active load case shown against the unladen reference.");
-    const powertrainRight=document.querySelector("#view-powertrain .grid.two > div");
-    prependPanel(powertrainRight,"Torque path and final drive",powertrainDiagram(),"Functional torque flow above; sprocket and chain construction below.");
-    powertrainRight?.insertAdjacentHTML("beforeend",powertrainBenchmarkPanel());
-
-    powertrainRight?.insertAdjacentHTML("beforeend",transmissionComparisonPanel()+wheelRpmPanel());
-    const powertrainHead=document.querySelector("#view-powertrain .view-head");
-    powertrainHead?.insertAdjacentHTML("afterend",transmissionSelector()+`<div class="local-context">${dutyCaseControl(false)}</div>`);
-    const powertrainInputs=document.querySelector("#view-powertrain .grid.two > .panel .fields");
-    powertrainInputs?.insertAdjacentHTML("beforeend",`${input("powertrain.dutyDurationMinutes","Duty duration","min",{step:"0.5"})}${input("powertrain.dutyGear","Duty gear","gear")}`);
-    const powertrainMetrics=document.querySelector("#view-powertrain .metric-grid");
-    powertrainMetrics?.insertAdjacentHTML("afterbegin",metric("Peak envelope power",outputs.powertrain?.peakPower,{owner:"powertrain",digits:2}));
-    powertrainMetrics?.insertAdjacentHTML("beforeend",`${metric("Duty mechanical energy",outputs.powertrain?.dutyEnergy,{owner:"powertrain",digits:2})}${metric("Duty road speed",outputs.powertrain?.dutyRoadSpeed,{owner:"powertrain",digits:1})}`);
     const batteryHead=document.querySelector("#view-battery_calculators .view-head");
     batteryHead?.insertAdjacentHTML("afterend",electricalContextControls(false,"battery"));
     const electricalHead=document.querySelector("#view-electrical .view-head");
@@ -822,7 +1311,7 @@
     window.MotoGeometryState = state;
     window.MotoGeometryOutputs = outputs;
     const html = [renderClosure(), ...DATA.tabs.map(tab => {
-      const renderer = { stance: renderStance, steering: renderSteering, suspension: renderSuspension, anti_squat: renderAntiSquat, sensitivity: renderSensitivity, sag: renderSag, powertrain: renderPowertrain, vehicle_calculators: renderVehicle, battery_calculators: renderBattery, electrical: renderElectrical }[tab.id];
+      const renderer = { stance: renderStance, steering: renderSteering, suspension: renderSuspension, anti_squat: renderAntiSquat, sensitivity: renderSensitivity, sag: renderSag, powertrain: renderPowertrain, motor_sizing: renderMotor, braking: renderBraking, vehicle_calculators: renderVehicle, battery_calculators: renderBattery, electrical: renderElectrical }[tab.id];
       return renderer(tab);
     })].join("");
     document.querySelector("#main").innerHTML = html;
@@ -833,19 +1322,50 @@
     requestAnimationFrame(drawCharts);
   }
 
+  // One commit path for every owner field: write, bump revisions, mark consumers stale, then apply
+  // the few explicit cross-field rules (catalogue presets, gear-count clamps) and record them.
+  function commitPath(path, value, owner) {
+    set(path, value);
+    state.meta.revision += 1;
+    state.meta.domainRevisions[owner] = (state.meta.domainRevisions[owner] || 0) + 1;
+    const notes = [];
+    const p = state.powertrain;
+    if (path === "powertrain.chainSize") {
+      const entry = (DATA.finalDriveCatalogue || []).find(item => item.id === value);
+      if (entry && entry.pitch) { p.chainPitch = entry.pitch; p.chainRollerDia = entry.roller; p.chainBreakingLoad = entry.breakingLoad; notes.push(`${entry.label} pitch, roller and breaking load applied`); }
+    }
+    if (["powertrain.chainPitch", "powertrain.chainRollerDia", "powertrain.chainBreakingLoad"].includes(path) && p.chainSize !== "custom") {
+      const entry = (DATA.finalDriveCatalogue || []).find(item => item.id === p.chainSize);
+      const key = { "powertrain.chainPitch": "pitch", "powertrain.chainRollerDia": "roller", "powertrain.chainBreakingLoad": "breakingLoad" }[path];
+      if (!entry || Number(entry[key]) !== Number(value)) { p.chainSize = "custom"; notes.push("final drive switched to Custom"); }
+    }
+    if (path === "powertrain.gearCount") {
+      const count = Math.max(1, Math.min(6, Math.round(Number(value) || 6)));
+      if (Number(p.dutyGear) > count) { p.dutyGear = count; notes.push(`duty gear clamped to ${count}`); }
+      if (Number(state.vehicle.studyGear) > count) { state.vehicle.studyGear = count; notes.push(`study gear clamped to ${count}`); }
+    }
+    lastChange = `${path} changed by ${owner}${notes.length ? ` (${notes.join("; ")})` : ""}`;
+    stale = new Set(dependencies[owner] || []);
+    renderApp();
+  }
+
   function bindInputs() {
     document.querySelectorAll("[data-path]").forEach(element => element.addEventListener(element.tagName === "SELECT" ? "change" : "input", event => {
       const path = event.currentTarget.dataset.path;
       const owner = event.currentTarget.dataset.owner || path.split(".")[0];
       const raw = event.currentTarget.value;
-      const value = event.currentTarget.type === "number" ? Number(raw) : raw;
-      set(path, value);
-      state.meta.revision += 1;
-      state.meta.domainRevisions[owner] = (state.meta.domainRevisions[owner] || 0) + 1;
-      lastChange = `${path} changed by ${owner}`;
-      stale = new Set(dependencies[owner] || []);
-      renderApp();
+      const numericSelect = element.tagName === "SELECT" && raw !== "" && typeof get(path) === "number" && Number.isFinite(Number(raw));
+      const value = event.currentTarget.type === "number" || numericSelect ? Number(raw) : raw;
+      commitPath(path, value, owner);
     }));
+    document.querySelectorAll("[data-std-path]").forEach(element => element.addEventListener("change", event => {
+      const path = event.currentTarget.dataset.stdPath, owner = event.currentTarget.dataset.owner || path.split(".")[0];
+      const raw = event.currentTarget.value;
+      if (raw === "__custom") { customFields.add(path); persistUiPreferences(); renderApp(); return; }
+      customFields.delete(path); persistUiPreferences();
+      commitPath(path, event.currentTarget.dataset.numeric === "true" ? Number(raw) : raw, owner);
+    }));
+    document.querySelectorAll("[data-combo-metric]").forEach(element => element.addEventListener("change", event => { comboMetric = event.currentTarget.value; persistUiPreferences(); renderApp(); }));
     document.querySelectorAll("[data-component]").forEach(element => element.addEventListener(element.tagName === "SELECT" ? "change" : "input", event => {
       const index = Number(event.currentTarget.dataset.component);
       const key = event.currentTarget.dataset.componentKey;
@@ -887,9 +1407,9 @@
 
   function collectIssues() {
     const issues = [];
-    ["massProperties","ergonomics","steering","suspension","sag","antiSquat","sensitivity","powertrain","vehicle","battery","electrical"].forEach(key => {
+    ["massProperties","ergonomics","steering","suspension","sag","antiSquat","sensitivity","braking","powertrain","motor","vehicle","battery","electrical"].forEach(key => {
       const item = outputs[key];
-      if (item?.ok === false) issues.push(`${key}: ${item.error || "invalid inputs"}`);
+      if (item?.ok === false) issues.push(`${tabFor(key)}: ${item.error || "invalid inputs"}`);
     });
     const frontAxleX = Number(state.stance.rearAxleX) + Number(state.stance.wheelbase);
     if (!Number.isFinite(frontAxleX) || Number(state.stance.wheelbase) <= 0) issues.push("Axle-spacing closure conflict.");
@@ -953,12 +1473,10 @@
   function drawCharts() {
     if (activeTab === "suspension" && outputs.suspension?.points) plot(document.querySelector("#suspensionChart"), outputs.suspension.points, "wheelTravel", "motionRatio", "#266b92", "Wheel travel (mm)", "MR shock / wheel");
     if (activeTab === "suspension") drawLoadDeflection(document.querySelector("#loadDeflectionChart"));
-    if (activeTab === "powertrain") { drawGearRatioComparison(document.querySelector("#gearRatioChart")); drawWheelRpmComparison(document.querySelector("#wheelRpmChart")); }
+    if (activeTab === "powertrain") { drawGearRatioComparison(document.querySelector("#gearRatioChart")); drawSpeedRpm(document.querySelector("#speedRpmChart")); }
+    if (activeTab === "motor_sizing") drawMotorCharts();
+    if (activeTab === "braking") drawBrakingCharts();
     if (activeTab === "anti_squat" && outputs.antiSquat?.samples) plot(document.querySelector("#antiSquatChart"), outputs.antiSquat.samples, "wheelTravel", "anti", "#1f6b50", "Rear wheel travel (mm)", "Anti-squat (%)");
-    if (activeTab === "powertrain" && outputs.powertrain?.rows) {
-      const points=[];outputs.powertrain.rows.forEach(row=>{for(let rpm=0;rpm<=state.powertrain.maxRpm;rpm+=state.powertrain.maxRpm/40)points.push({rpm,speed:rpm/row.overallRatio*outputs.powertrain.rearTyre.circumference/1e6*60,gear:row.gear})});
-      const canvas=document.querySelector("#powertrainChart"); if(canvas){const ys=points.map(p=>p.speed),v=drawAxes(canvas,"Motor RPM","Road speed (km/h)",0,Math.max(...ys)*1.08),colors=["#1f6b50","#266b92","#6e56a0","#a66516","#b84d56","#465b66"];outputs.powertrain.rows.forEach(row=>{const group=points.filter(p=>p.gear===row.gear);v.ctx.strokeStyle=colors[row.gear-1];v.ctx.lineWidth=2;v.ctx.beginPath();group.forEach((p,i)=>{const x=v.tx(p.rpm,state.powertrain.maxRpm),y=v.ty(p.speed);i?v.ctx.lineTo(x,y):v.ctx.moveTo(x,y)});v.ctx.stroke();});}
-    }
     if (activeTab === "sag" && outputs.sag?.loadedRake) {
       const canvas=document.querySelector("#loadedGeometryChart"); if(canvas){const rect=canvas.getBoundingClientRect(),ratio=window.devicePixelRatio||1;canvas.width=rect.width*ratio;canvas.height=rect.height*ratio;const c=canvas.getContext("2d");c.scale(ratio,ratio);const W=rect.width,H=rect.height;c.clearRect(0,0,W,H);const rows=[["UNLADEN",state.stance.targetRake,outputs.steering.groundTrail.value,state.stance.wheelbase,state.stance.groundClearance],["LOADED",outputs.sag.loadedRake.value,outputs.sag.loadedTrail.value,outputs.sag.loadedWheelbase.value,outputs.sag.loadedClearance.value]];const labels=["Rake (deg)","Trail (mm)","Wheelbase / 10", "Clearance (mm)"];rows.forEach((row,ri)=>{const color=ri?"#1f6b50":"#266b92";c.fillStyle=color;c.font="800 12px Inter";c.fillText(row[0],20,35+ri*130);row.slice(1).forEach((value,i)=>{const norm=i===2?value/10:value;const y=60+ri*130+i*25;c.fillStyle="#61717b";c.font="11px Inter";c.fillText(labels[i],20,y);c.fillStyle=color;c.fillRect(130,y-10,Math.max(2,Math.min(W-170,norm/160*(W-170))),12);c.fillText(fmt(value,1),W-55,y);});});}}
   }
@@ -976,6 +1494,17 @@
       if(action.dataset.action==="propose-battery"){download(`battery-proposal-r${state.meta.revision}.json`,JSON.stringify({sourceElectricalRevision:state.meta.revision,proposal:outputs.battery.proposal,downstreamConsumers:dependencies.electrical},null,2));}
       if(action.dataset.action==="add-component"){state.components.push({id:`custom-${Date.now()}`,category:"Custom",label:"Custom component",mass:1,x:0,z:0,length:100,width:100,height:100,continuous:0,peak:0,inrush:0,standby:0,sleep:0,essential:false,states:state.meta.electricalScenario,provenance:"User entry"});state.meta.revision++;state.meta.domainRevisions.electrical++;lastChange="Custom electrical component added";stale=new Set(dependencies.electrical);persist();renderApp();}
       if(action.dataset.action==="remove-component"){state.components.splice(Number(action.dataset.index),1);state.meta.revision++;state.meta.domainRevisions.electrical++;lastChange="Electrical component removed";stale=new Set(dependencies.electrical);persist();renderApp();}
+      if(action.dataset.action==="apply-motor"&&outputs.motor?.ok){
+        const proposal=outputs.motor.proposal,p=state.powertrain,notes=[];
+        Object.assign(p,{maxTorque:proposal.maxTorque,baseRpm:proposal.baseRpm,maxRpm:proposal.maxRpm});
+        // Keep the named duty point inside the new envelope so downstream energy studies stay solvable.
+        if(Number(p.dutyRpm)>p.maxRpm){p.dutyRpm=p.maxRpm;notes.push(`duty RPM clamped to ${p.maxRpm}`);}
+        const available=Number(p.dutyRpm)<=p.baseRpm?p.maxTorque:Math.floor(p.maxTorque*p.baseRpm/Math.max(1,Number(p.dutyRpm)));
+        if(Number(p.dutyTorque)>available){p.dutyTorque=available;notes.push(`duty torque clamped to ${available} N·m`);}
+        state.meta.revision++;state.meta.domainRevisions.powertrain=(state.meta.domainRevisions.powertrain||0)+1;
+        lastChange=`Required motor applied: ${proposal.maxTorque} N·m, ${proposal.baseRpm} / ${proposal.maxRpm} rpm${notes.length?` (${notes.join("; ")})`:""}`;
+        stale=new Set(dependencies.powertrain);persist();renderApp();
+      }
       if(action.dataset.action==="lock-stance-advanced"){stanceAdvancedOpen=false;persistUiPreferences();renderApp();}
       if(action.dataset.action==="reset-network-layout"){Object.keys(electricalNodePositions).filter(key=>key.startsWith(`${state.meta.architectureVariant}:`)).forEach(key=>delete electricalNodePositions[key]);persistUiPreferences();renderApp();}
     });

@@ -553,8 +553,9 @@
     const loadedCgHeight = masses.cgZ - contact.z;
     const loadTan = loadedCgHeight / Math.max(1, state.stance.wheelbase);
     const pitch = Number(state.powertrain.chainPitch);
-    const frontPitchRadius = pitch / (2 * Math.sin(Math.PI / Number(state.powertrain.frontTeeth)));
-    const rearPitchRadius = pitch / (2 * Math.sin(Math.PI / Number(state.powertrain.rearTeeth)));
+    const driveKind = String(state.powertrain.chainSize).startsWith("belt") ? "belt" : "chain";
+    const frontPitchRadius = sprocketPitchRadius(pitch, Number(state.powertrain.frontTeeth), driveKind);
+    const rearPitchRadius = sprocketPitchRadius(pitch, Number(state.powertrain.rearTeeth), driveKind);
     const drive = { x: Number(state.powertrain.driveSprocketX), z: Number(state.powertrain.driveSprocketZ) };
     let instant;
     let tangent = null;
@@ -606,62 +607,192 @@
     };
   }
 
+  // ---- Final-drive geometry helpers --------------------------------------------------
+  const gcd = (a, b) => { a = Math.abs(Math.round(a)); b = Math.abs(Math.round(b)); while (b) [a, b] = [b, a % b]; return a; };
+  function sprocketPitchRadius(pitch, teeth, kind) {
+    return kind === "belt" ? teeth * pitch / (2 * Math.PI) : pitch / (2 * Math.sin(Math.PI / teeth));
+  }
+  // ISO 606 open-chain length in pitches (identical form for a toothed belt in teeth).
+  function linksForCentre(centre, pitch, front, rear) {
+    const cp = centre / pitch;
+    return 2 * cp + (front + rear) / 2 + Math.pow(rear - front, 2) / (4 * Math.PI * Math.PI * cp);
+  }
+  // Closed-form inverse of the open-chain equation: centre distance for a whole link count.
+  function centreForLinks(links, pitch, front, rear) {
+    const a = links - (front + rear) / 2;
+    const disc = a * a - 8 * Math.pow((rear - front) / (2 * Math.PI), 2);
+    return disc >= 0 ? pitch / 4 * (a + Math.sqrt(disc)) : null;
+  }
+  function sprocketDiameters(pitch, teeth, kind, roller, pitchLineDifferential) {
+    if (kind === "belt") {
+      const pitchDiameter = teeth * pitch / Math.PI;
+      return { pitch: pitchDiameter, outside: pitchDiameter - 2 * (pitchLineDifferential || 0), root: null };
+    }
+    const pitchDiameter = pitch / Math.sin(Math.PI / teeth);
+    return { pitch: pitchDiameter, outside: pitch * (0.6 + 1 / Math.tan(Math.PI / teeth)), root: pitchDiameter - roller };
+  }
+  function chainFit(state, front, rear, centre) {
+    const p = state.powertrain;
+    const kind = String(p.chainSize).startsWith("belt") ? "belt" : "chain";
+    const pitch = Number(p.chainPitch);
+    const exact = linksForCentre(centre, pitch, front, rear);
+    const step = kind === "chain" ? 2 : 1;
+    const minCentre = centre - Math.max(0, Number(p.axleAdjustForward) || 0);
+    const maxCentre = centre + Math.max(0, Number(p.axleAdjustRearward) || 0);
+    const minLinks = linksForCentre(minCentre, pitch, front, rear), maxLinks = linksForCentre(maxCentre, pitch, front, rear);
+    const valid = [];
+    for (let links = Math.ceil(minLinks / step) * step; links <= maxLinks + 1e-9; links += step) valid.push(links);
+    const nearest = Math.round(exact / step) * step;
+    const candidates = valid.length ? valid : [nearest];
+    const recommended = candidates.reduce((best, links) => Math.abs(centreForLinks(links, pitch, front, rear) - centre) < Math.abs(centreForLinks(best, pitch, front, rear) - centre) ? links : best, candidates[0]);
+    const recommendedCentre = centreForLinks(recommended, pitch, front, rear);
+    return { kind, pitch, exact, recommended, recommendedCentre, axleMove: recommendedCentre - centre, withinAdjuster: valid.includes(recommended), validLinks: valid, length: recommended * pitch, step };
+  }
+
   function gearing(state, masses) {
     const rearTyre = tyre(state.stance.rearTyreWidth, state.stance.rearTyreAspect, state.stance.rearRim);
     if (!rearTyre.ok) return rearTyre;
     const p = state.powertrain;
-    const finalRatio = Number(p.rearTeeth) / Math.max(1e-9, Number(p.frontTeeth));
-    const ratios = [p.gear1, p.gear2, p.gear3, p.gear4, p.gear5, p.gear6].map(Number);
+    const gearCount = clamp(Math.round(Number(p.gearCount) || 6), 1, 6);
+    const front = Number(p.frontTeeth), rear = Number(p.rearTeeth);
+    const finalRatio = rear / Math.max(1e-9, front);
+    const ratios = [p.gear1, p.gear2, p.gear3, p.gear4, p.gear5, p.gear6].slice(0, gearCount).map(Number);
     const availableDutyTorque = Number(p.dutyRpm) <= Number(p.baseRpm) ? Number(p.maxTorque) : Number(p.maxTorque) * Number(p.baseRpm) / Math.max(1, Number(p.dutyRpm));
-    if (ratios.some(v => v <= 0) || finalRatio <= 0 || Number(p.primaryRatio) <= 0 || Number(p.drivelineEfficiency) <= 0 || Number(p.drivelineEfficiency) > 1) return invalid("Ratios and tooth counts must be positive and driveline efficiency must be in (0, 1].");
+    if (ratios.some(v => !(v > 0)) || finalRatio <= 0 || Number(p.primaryRatio) <= 0 || Number(p.drivelineEfficiency) <= 0 || Number(p.drivelineEfficiency) > 1) return invalid("Ratios and tooth counts must be positive and driveline efficiency must be in (0, 1].");
     if (!(Number(p.maxTorque) > 0) || !(Number(p.baseRpm) > 0) || !(Number(p.maxRpm) >= Number(p.baseRpm)) || !(Number(p.dutyRpm) >= 0 && Number(p.dutyRpm) <= Number(p.maxRpm)) || !(Number(p.dutyTorque) >= 0 && Number(p.dutyTorque) <= availableDutyTorque + 1e-9)) return invalid("Torque-speed inputs require positive torque, 0 < base RPM <= max RPM, and a named-duty point inside the available envelope.");
-    if (![p.frontTeeth,p.rearTeeth].every(value => Number.isInteger(Number(value)) && Number(value) >= 3)) return invalid("Sprocket tooth counts must be integers of at least three teeth.");
-    const speedAt = (rpm, gearRatio) => rpm / (Number(p.primaryRatio) * gearRatio * finalRatio) * rearTyre.circumference / 1e6 * 60;
-    const torqueAt = (torque, gearRatio) => torque * Number(p.primaryRatio) * gearRatio * finalRatio * Number(p.drivelineEfficiency);
+    if (![front, rear].every(value => Number.isInteger(value) && value >= 3)) return invalid("Sprocket tooth counts must be integers of at least three teeth.");
+    if (!(Number(p.chainPitch) > 0)) return invalid("Chain or belt pitch must be positive.");
+    const circumferenceM = rearTyre.circumference / 1000;
+    const speedAt = (rpm, overall) => rpm / overall * circumferenceM * 60 / 1000;
+    const rpmAt = (kmh, overall) => kmh * 1000 / 60 / circumferenceM * overall;
     const torqueAtRpm = rpm => rpm <= Number(p.baseRpm) ? Number(p.maxTorque) : Number(p.maxTorque) * Number(p.baseRpm) / Math.max(1, rpm);
-    const rows = ratios.map((gearRatio, index) => ({
-      gear: index + 1,
-      gearRatio,
-      overallRatio: Number(p.primaryRatio) * gearRatio * finalRatio,
-      speedAtMaxRpm: speedAt(Number(p.maxRpm), gearRatio),
-      speedAtDutyRpm: speedAt(Number(p.dutyRpm), gearRatio),
-      wheelTorqueAtDuty: torqueAt(Number(p.dutyTorque), gearRatio),
-      curve: Array.from({ length: 41 }, (_, point) => {
-        const rpm = Number(p.maxRpm) * point / 40;
-        return { rpm, motorTorque: torqueAtRpm(rpm), speed: speedAt(rpm, gearRatio), wheelTorque: torqueAt(torqueAtRpm(rpm), gearRatio) };
-      })
-    }));
+    const eta = Number(p.drivelineEfficiency), radiusM = rearTyre.radius / 1000;
+    const cruise = Number(p.cruiseSpeed) > 0 ? Number(p.cruiseSpeed) : null;
+    const rows = ratios.map((gearRatio, index) => {
+      const overallRatio = Number(p.primaryRatio) * gearRatio * finalRatio;
+      return {
+        gear: index + 1,
+        gearRatio,
+        overallRatio,
+        stepPercent: index > 0 ? (ratios[index - 1] / gearRatio - 1) * 100 : null,
+        speedAtMaxRpm: speedAt(Number(p.maxRpm), overallRatio),
+        speedAtDutyRpm: speedAt(Number(p.dutyRpm), overallRatio),
+        rpmAtCruise: cruise ? rpmAt(cruise, overallRatio) : null,
+        cruiseOverRedline: cruise ? rpmAt(cruise, overallRatio) > Number(p.maxRpm) : false,
+        wheelTorqueAtDuty: Number(p.dutyTorque) * overallRatio * eta,
+        wheelTorqueAtPeak: Number(p.maxTorque) * overallRatio * eta,
+        tractiveForceAtPeak: Number(p.maxTorque) * overallRatio * eta / radiusM,
+        curve: Array.from({ length: 41 }, (_, point) => {
+          const rpm = Number(p.maxRpm) * point / 40;
+          return { rpm, motorTorque: torqueAtRpm(rpm), speed: speedAt(rpm, overallRatio), wheelTorque: torqueAtRpm(rpm) * overallRatio * eta };
+        })
+      };
+    });
     const shaftPowerKw = Number(p.dutyTorque) * Number(p.dutyRpm) * 2 * Math.PI / 60 / 1000;
     const peakPowerKw = Number(p.maxTorque) * Number(p.baseRpm) * 2 * Math.PI / 60 / 1000;
     const dutyDurationMinutes = Number(p.dutyDurationMinutes);
     const dutyGear = Math.round(Number(p.dutyGear));
-    if (!(dutyDurationMinutes > 0) || !(dutyGear >= 1 && dutyGear <= ratios.length)) return invalid("Named duty requires a positive duration and a selected gear from 1 to 6.");
+    if (!(dutyDurationMinutes > 0) || !(dutyGear >= 1 && dutyGear <= ratios.length)) return invalid(`Named duty requires a positive duration and a selected gear from 1 to ${ratios.length}.`);
     const dutyEnergyKWh = shaftPowerKw * dutyDurationMinutes / 60;
+
+    // Final drive: chain or toothed belt on the real hardpoints.
+    const catalogueEntry = (global.PRD_DATA?.finalDriveCatalogue || []).find(item => item.id === p.chainSize) || {};
+    const kind = String(p.chainSize).startsWith("belt") ? "belt" : "chain";
     const pitch = Number(p.chainPitch);
-    const frontPitchRadius = pitch / (2 * Math.sin(Math.PI / Number(p.frontTeeth)));
-    const rearPitchRadius = pitch / (2 * Math.sin(Math.PI / Number(p.rearTeeth)));
-    const centreDistance = Math.hypot(Number(state.stance.rearAxleX) - Number(p.driveSprocketX), Number(state.stance.rearAxleZ) - Number(p.driveSprocketZ));
-    const centrePitches = centreDistance / pitch;
-    const chainLinks = 2 * centrePitches + (Number(p.frontTeeth) + Number(p.rearTeeth)) / 2 + Math.pow(Number(p.rearTeeth) - Number(p.frontTeeth), 2) / (4 * Math.PI * Math.PI * centrePitches);
+    const frontPitchRadius = sprocketPitchRadius(pitch, front, kind);
+    const rearPitchRadius = sprocketPitchRadius(pitch, rear, kind);
     const driveCentre = { x: Number(p.driveSprocketX), z: Number(p.driveSprocketZ) };
     const rearCentre = { x: Number(state.stance.rearAxleX), z: Number(state.stance.rearAxleZ) };
+    const centreDistance = Math.hypot(rearCentre.x - driveCentre.x, rearCentre.z - driveCentre.z);
+    if (centreDistance <= frontPitchRadius + rearPitchRadius) return invalid("Sprocket pitch circles overlap at the entered drive-sprocket and axle positions.");
+    const chainLinks = linksForCentre(centreDistance, pitch, front, rear);
+    const fit = chainFit(state, front, rear, centreDistance);
+    const frontDiameters = sprocketDiameters(pitch, front, kind, Number(p.chainRollerDia) || 0, catalogueEntry.pitchLineDifferential);
+    const rearDiameters = sprocketDiameters(pitch, rear, kind, Number(p.chainRollerDia) || 0, catalogueEntry.pitchLineDifferential);
+    const smallRadius = Math.min(frontPitchRadius, rearPitchRadius), largeRadius = Math.max(frontPitchRadius, rearPitchRadius);
+    const wrap = Math.PI - 2 * Math.asin((largeRadius - smallRadius) / centreDistance);
+    const smallTeeth = frontPitchRadius <= rearPitchRadius ? front : rear;
+    const frontSprocketTorque = Number(p.maxTorque) * Number(p.primaryRatio) * ratios[0];
+    const tensionKn = frontSprocketTorque / (frontPitchRadius / 1000) / 1000;
+    const breakingLoad = Number(p.chainBreakingLoad);
+    const frontSprocketMaxRpm = Number(p.maxRpm) / (Number(p.primaryRatio) * ratios.at(-1));
+    const chainSpeed = frontSprocketMaxRpm / 60 * front * pitch / 1000;
+    const recommended = fit.recommended;
     const upperChainTangent = upperTangent(driveCentre, rearCentre, frontPitchRadius, rearPitchRadius);
     const lowerChainTangent = lowerTangent(driveCentre, rearCentre, frontPitchRadius, rearPitchRadius);
+
+    // Sprocket combination matrix, front ±3 by rear ±3 around the current pair.
+    const topRatio = Number(p.primaryRatio) * ratios.at(-1);
+    const currentTop = speedAt(Number(p.maxRpm), topRatio * finalRatio);
+    const comboFronts = Array.from({ length: 7 }, (_, i) => front - 3 + i).filter(t => t >= 9);
+    const comboRears = Array.from({ length: 7 }, (_, i) => rear - 3 + i).filter(t => t >= 9);
+    const combos = comboFronts.map(f => comboRears.map(r => {
+      const ratio = r / f, centreFits = centreDistance > sprocketPitchRadius(pitch, f, kind) + sprocketPitchRadius(pitch, r, kind);
+      const comboFit = centreFits ? chainFit(state, f, r, centreDistance) : null;
+      const topSpeed = speedAt(Number(p.maxRpm), topRatio * ratio);
+      return { front: f, rear: r, finalRatio: ratio, topSpeed, topSpeedDeltaPercent: (topSpeed / currentTop - 1) * 100, firstGearWheelTorque: Number(p.maxTorque) * Number(p.primaryRatio) * ratios[0] * ratio * eta, links: comboFit?.recommended ?? null, withinAdjuster: comboFit?.withinAdjuster ?? false, current: f === front && r === rear };
+    }));
+
+    // Baseline vs proposed sprocket set.
+    const pf = Number(p.proposedFrontTeeth), pr = Number(p.proposedRearTeeth);
+    let proposed = null;
+    if (Number.isInteger(pf) && Number.isInteger(pr) && pf >= 3 && pr >= 3 && centreDistance > sprocketPitchRadius(pitch, pf, kind) + sprocketPitchRadius(pitch, pr, kind)) {
+      const proposedFinal = pr / pf, proposedFit = chainFit(state, pf, pr, centreDistance);
+      const sameChainCentre = centreForLinks(recommended, pitch, pf, pr);
+      proposed = {
+        front: pf, rear: pr, finalRatio: proposedFinal,
+        finalRatioDeltaPercent: (proposedFinal / finalRatio - 1) * 100,
+        topSpeed: speedAt(Number(p.maxRpm), topRatio * proposedFinal),
+        topSpeedDeltaPercent: (finalRatio / proposedFinal - 1) * 100,
+        wheelTorqueDeltaPercent: (proposedFinal / finalRatio - 1) * 100,
+        cruiseRpmTop: cruise ? rpmAt(cruise, topRatio * proposedFinal) : null,
+        cruiseRpmTopBaseline: cruise ? rpmAt(cruise, topRatio * finalRatio) : null,
+        recommendedLinks: proposedFit.recommended,
+        axleMove: proposedFit.axleMove,
+        withinAdjuster: proposedFit.withinAdjuster,
+        sameChainAxleMove: sameChainCentre === null ? null : sameChainCentre - fit.recommendedCentre
+      };
+    }
+    const overallRatios = rows.map(row => row.overallRatio);
     return {
       ok: true,
       rearTyre,
+      gearCount,
+      kind,
       finalRatio: result(finalRatio, "ratio", "Rear teeth divided by front teeth"),
+      overallFirst: result(overallRatios[0], "ratio", "Primary × first gear × final drive"),
+      overallTop: result(overallRatios.at(-1), "ratio", "Primary × top gear × final drive"),
+      ratioSpread: result(overallRatios[0] / overallRatios.at(-1), "ratio", "First-gear overall ratio divided by top-gear overall ratio"),
       peakPower: result(peakPowerKw, "kW", "Peak of the entered constant-torque / constant-power envelope at base RPM"),
       shaftPower: result(shaftPowerKw, "kW", "Mechanical shaft power at named duty point"),
       dutyEnergy: result(dutyEnergyKWh, "kWh mechanical", "Named-duty shaft power multiplied by entered duration"),
       dutyRoadSpeed: result(rows[dutyGear - 1].speedAtDutyRpm, "km/h", "Kinematic road speed at named-duty RPM and selected duty gear"),
       rows,
-      kinematicTopSpeed: result(rows.at(-1).speedAtMaxRpm, "km/h", "Kinematic speed in top gear at maximum RPM", { note: "Road-load feasibility is not evaluated by this result." }),
+      kinematicTopSpeed: result(rows.at(-1).speedAtMaxRpm, "km/h", "Kinematic speed in top gear at maximum RPM", { note: "Road-load feasibility is evaluated in Motor sizing." }),
       powerToWeight: result(shaftPowerKw / Math.max(1e-9, masses.totalMass), "kW/kg", "Duty-point shaft power divided by reconciled load-case mass"),
-      frontPitchRadius: result(frontPitchRadius, "mm", "Front sprocket pitch radius from chain pitch and tooth count"),
-      rearPitchRadius: result(rearPitchRadius, "mm", "Rear sprocket pitch radius from chain pitch and tooth count"),
+      frontPitchRadius: result(frontPitchRadius, "mm", "Front sprocket pitch radius from pitch and tooth count"),
+      rearPitchRadius: result(rearPitchRadius, "mm", "Rear sprocket pitch radius from pitch and tooth count"),
       chainCentreDistance: result(centreDistance, "mm", "Master-frame distance between drive sprocket and rear axle"),
-      chainLinks: result(chainLinks, "pitches", "Ideal open-chain pitch count; select an allowable even link count separately"),
+      chainLinks: result(chainLinks, kind === "belt" ? "teeth" : "pitches", "Exact open-chain length for the hardpoints, before rounding to a whole link count"),
+      recommendedLinks: result(recommended, kind === "belt" ? "teeth" : "links", kind === "belt" ? "Whole belt tooth count closest to the hardpoints" : "Even link count that keeps the axle closest to the hardpoint, inside the adjuster where possible"),
+      chainLength: result(fit.length, "mm", "Recommended link count × pitch"),
+      recommendedCentre: result(fit.recommendedCentre, "mm", "Sprocket centre distance with the recommended link count"),
+      axleMove: result(fit.axleMove, "mm", "Axle movement from the hardpoint to fit the recommended chain; + is rearward"),
+      wrapAngle: result(deg(wrap), "deg", "Chain wrap on the smaller sprocket"),
+      teethEngaged: result(wrap / (2 * Math.PI) * smallTeeth, "teeth", "Teeth in engagement on the smaller sprocket"),
+      chainTension: result(tensionKn, "kN", "Tight-side tension at peak motor torque in first gear; no efficiency credit"),
+      chainSafetyFactor: result(breakingLoad > 0 ? breakingLoad / tensionKn : null, "×", "Entered breaking load divided by peak first-gear tension"),
+      chainSpeed: result(chainSpeed, "m/s", "Chain linear speed at maximum RPM in top gear"),
+      chain: {
+        kind, pitch, front, rear, centreDistance, exact: chainLinks, ...fit,
+        frontDiameters, rearDiameters,
+        sameToothFront: front / gcd(front, recommended),
+        sameToothRear: rear / gcd(rear, recommended),
+        sprocketCommonFactor: gcd(front, rear),
+        adjusterForward: Number(p.axleAdjustForward), adjusterRearward: Number(p.axleAdjustRearward)
+      },
+      combos,
+      proposed,
       driveCentre,
       rearCentre,
       upperChainTangent,
@@ -702,6 +833,318 @@
       horsepowerPerTonne: result(shaftPower * 1.34102209 / (masses.totalMass / 1000), "hp/t", "Metric study power expressed as mechanical horsepower per tonne"),
       kilogramsPerKw: result(masses.totalMass / Math.max(1e-9, shaftPower), "kg/kW", "Active load-case mass per study kilowatt"),
       proposal: { targetSpeed: Number(v.targetSpeed), studyGear: gear, studyRpm: Number(v.studyRpm), studyTorque: Number(v.studyTorque) }
+    };
+  }
+
+  // ---- Motor sizing --------------------------------------------------------------------
+  // Envelope: constant torque to base RPM, constant power to max RPM, nothing beyond max RPM.
+  function motorTorqueAt(motor, rpm) {
+    if (rpm > motor.maxRpm + 1e-9) return 0;
+    return rpm <= motor.baseRpm ? motor.peakTorque : motor.peakTorque * motor.baseRpm / Math.max(1e-9, rpm);
+  }
+  function roadLoadForce(v, params, gradePercent = 0) {
+    const theta = Math.atan(gradePercent / 100);
+    return params.mass * G * (params.rollingResistance * Math.cos(theta) + Math.sin(theta)) + 0.5 * params.airDensity * params.dragCoefficientArea * v * v;
+  }
+  // Best available wheel force at road speed v (m/s) across all ratios, and the ratio that gives it.
+  function bestWheelForce(motor, ratios, params, v) {
+    let best = { force: 0, ratio: null, rpm: null };
+    ratios.forEach(ratio => {
+      const rpm = v / params.wheelRadius * ratio * 60 / (2 * Math.PI);
+      const force = motorTorqueAt(motor, rpm) * ratio * params.efficiency / params.wheelRadius;
+      if (rpm <= motor.maxRpm + 1e-9 && force > best.force) best = { force, ratio, rpm };
+    });
+    return best;
+  }
+  // Explicit-Euler straight-line acceleration (the same scheme as the Ather time-step sheet).
+  function simulateAcceleration(motor, ratios, params, options = {}) {
+    const dt = options.dt || 0.01, tMax = options.tMax || 60, stopAt = options.stopAt || 100 / 3.6;
+    const marks = (options.marks || [60, 100]).map(kmh => ({ kmh, v: kmh / 3.6, time: null }));
+    const trace = [{ t: 0, v: 0 }];
+    let v = 0, t = 0, sample = 0;
+    while (t < tMax - 1e-9) {
+      const wheel = bestWheelForce(motor, ratios, params, v);
+      let accel = (wheel.force - roadLoadForce(v, params)) / (params.mass * params.inertiaFactor);
+      if (options.accelCap > 0) accel = Math.min(accel, options.accelCap);
+      if (accel <= 1e-6) break;
+      const vNext = v + accel * dt;
+      marks.forEach(mark => { if (mark.time === null && vNext >= mark.v) mark.time = t + dt * (mark.v - v) / (vNext - v); });
+      v = vNext; t += dt;
+      if (++sample % Math.max(1, Math.round(0.1 / dt)) === 0) trace.push({ t, v });
+      if (v >= stopAt && marks.every(mark => mark.time !== null)) break;
+    }
+    trace.push({ t, v });
+    return { trace, times: Object.fromEntries(marks.map(mark => [mark.kmh, mark.time])), finalSpeed: v, finalTime: t };
+  }
+  function topSpeedFor(motor, ratios, params) {
+    // Highest speed where some ratio still delivers at least the level-road load.
+    const vLimit = Math.max(...ratios.map(ratio => motor.maxRpm * 2 * Math.PI / 60 / ratio * params.wheelRadius));
+    let found = 0;
+    for (let v = 0.25; v <= vLimit + 1e-9; v += 0.25) if (bestWheelForce(motor, ratios, params, v).force >= roadLoadForce(v, params)) found = v;
+    return found;
+  }
+  function gradeabilityAt(motor, ratios, params, v) {
+    const available = bestWheelForce(motor, ratios, params, v).force - 0.5 * params.airDensity * params.dragCoefficientArea * v * v;
+    if (available <= params.mass * G * params.rollingResistance) return 0;
+    let lo = 0, hi = Math.PI / 2 - 1e-6;
+    for (let i = 0; i < 60; i += 1) {
+      const mid = (lo + hi) / 2;
+      if (params.mass * G * (params.rollingResistance * Math.cos(mid) + Math.sin(mid)) <= available) lo = mid; else hi = mid;
+    }
+    return Math.tan(lo) * 100;
+  }
+
+  function motorSizing(state, gearingResult, masses) {
+    if (!masses?.ok) return invalid("Motor sizing requires current Mass Properties.");
+    const m = state.motor || {}, v = state.vehicle, p = state.powertrain;
+    const rearTyre = tyre(state.stance.rearTyreWidth, state.stance.rearTyreAspect, state.stance.rearRim);
+    if (!rearTyre.ok) return rearTyre;
+    const linked = m.ratioSource !== "manual";
+    if (linked && !gearingResult?.ok) return invalid("Linked ratios require a current Transmission result; switch the ratio source to manual or fix Transmission.");
+    const ratios = linked ? gearingResult.rows.map(row => row.overallRatio) : [Number(m.manualRatio)];
+    if (!ratios.every(ratio => ratio > 0)) return invalid("Overall ratio must be positive.");
+    const params = {
+      mass: masses.totalMass,
+      inertiaFactor: Number(m.inertiaFactor),
+      rollingResistance: Number(v.rollingResistance),
+      dragCoefficientArea: Number(v.dragCoefficientArea),
+      airDensity: Number(v.airDensity),
+      wheelRadius: rearTyre.radius / 1000,
+      efficiency: Number(p.drivelineEfficiency)
+    };
+    const vMax = Number(m.targetTopSpeed) / 3.6, cpsr = Number(m.constantPowerRatio);
+    const grade = Number(m.gradePercent), vGrade = Number(m.gradeSpeed) / 3.6;
+    const t60 = Number(m.target0to60), t100 = Number(m.target0to100);
+    if (!(vMax > 0) || !(cpsr >= 1) || !(params.inertiaFactor >= 1) || !(params.efficiency > 0 && params.efficiency <= 1)) return invalid("Motor sizing needs a positive top speed, constant-power ratio ≥ 1, inertia factor ≥ 1 and driveline efficiency in (0, 1].");
+    if (!(grade >= 0) || !(vGrade >= 0) || !(t60 >= 0) || !(t100 >= 0)) return invalid("Grade, grade speed and acceleration targets cannot be negative (use 0 to skip a target).");
+    const topRatio = Math.min(...ratios);
+    const maxRpm = vMax / params.wheelRadius * topRatio * 60 / (2 * Math.PI);
+    const baseRpm = maxRpm / cpsr;
+    const motorFor = torque => ({ peakTorque: torque, baseRpm, maxRpm });
+    const groundZ = Number(state.stance.rearAxleZ) - rearTyre.radius;
+    const cgHeight = masses.cgZ - groundZ;
+    const wheelieLimit = cgHeight > 0 ? G * (masses.cgX - Number(state.stance.rearAxleX)) / cgHeight : null;
+    const accelCap = m.wheelieCap === "no" ? 0 : (wheelieLimit || 0);
+
+    const requirements = [];
+    // Top speed: tallest ratio at max RPM, where the envelope delivers peakTorque / cpsr.
+    const roadAtVmax = roadLoadForce(vMax, params);
+    requirements.push({ id: "topSpeed", label: `Top speed ${fmtNum(m.targetTopSpeed)} km/h`, torque: cpsr * roadAtVmax * params.wheelRadius / (topRatio * params.efficiency) });
+    // Grade: best ratio able to reach the grade speed.
+    let gradePoint = null;
+    if (grade > 0) {
+      const wheelForce = roadLoadForce(vGrade, params, grade);
+      const options = ratios.map(ratio => {
+        const rpm = vGrade / params.wheelRadius * ratio * 60 / (2 * Math.PI);
+        if (rpm > maxRpm + 1e-9) return null;
+        const motorTorque = wheelForce * params.wheelRadius / (ratio * params.efficiency);
+        return { ratio, rpm, motorTorque, torque: rpm <= baseRpm ? motorTorque : motorTorque * rpm / baseRpm };
+      }).filter(Boolean);
+      if (!options.length) return invalid("No ratio reaches the grade speed below the required maximum RPM.");
+      const best = options.reduce((a, b) => b.torque < a.torque ? b : a);
+      gradePoint = { ...best, wheelForce, powerKw: wheelForce * vGrade / params.efficiency / 1000, gear: ratios.indexOf(best.ratio) + 1 };
+      requirements.push({ id: "grade", label: `${fmtNum(grade)}% grade at ${fmtNum(m.gradeSpeed)} km/h`, torque: best.torque });
+    }
+    // Acceleration targets: bisection on peak torque (time falls monotonically as torque rises).
+    // A run is only "met" when the mark is actually reached inside the target time; each run stops at the target.
+    const meets = (torque, kmh, target) => {
+      const time = simulateAcceleration(motorFor(torque), ratios, params, { marks: [kmh], stopAt: kmh / 3.6, tMax: target + 1e-9, accelCap, dt: 0.01 }).times[kmh];
+      return time !== null && time <= target;
+    };
+    const infeasible = [];
+    [[60, t60, "0–60 km/h"], [100, t100, "0–100 km/h"]].forEach(([kmh, target, label]) => {
+      if (!(target > 0)) return;
+      if (kmh / 3.6 > vMax + 1e-9) { infeasible.push(`${label} exceeds the top-speed target`); return; }
+      let hi = 50;
+      while (hi < 2e5 && !meets(hi, kmh, target)) hi *= 2;
+      if (!meets(hi, kmh, target)) {
+        const floor = accelCap > 0 ? kmh / 3.6 / accelCap : null;
+        infeasible.push(`${label} in ${fmtNum(target)} s is not reachable${floor ? `; the wheelie limit alone needs at least ${fmtNum(floor, 2)} s` : ""}`);
+        return;
+      }
+      let lo = 0;
+      for (let i = 0; i < 32; i += 1) { const mid = (lo + hi) / 2; if (meets(mid, kmh, target)) hi = mid; else lo = mid; }
+      requirements.push({ id: `accel${kmh}`, label: `${label} in ${fmtNum(target)} s`, torque: hi });
+    });
+    if (infeasible.length) return invalid(`${infeasible.join("; ")}. Relax the target, change the ratio or disable the wheelie cap.`);
+    const governing = requirements.reduce((a, b) => b.torque > a.torque ? b : a);
+    const peakTorque = governing.torque;
+    const required = motorFor(peakTorque);
+    const peakPowerKw = peakTorque * baseRpm * 2 * Math.PI / 60 / 1000;
+    const traceStop = Math.min(vMax, 105 / 3.6);
+    const requiredRun = simulateAcceleration(required, ratios, params, { stopAt: traceStop, tMax: 60, accelCap, marks: [60, 100] });
+
+    // Committed motor from the envelope owner, run through the same ratios and vehicle.
+    const committed = { peakTorque: Number(p.maxTorque), baseRpm: Number(p.baseRpm), maxRpm: Number(p.maxRpm) };
+    const committedValid = committed.peakTorque > 0 && committed.baseRpm > 0 && committed.maxRpm >= committed.baseRpm;
+    const committedRun = committedValid ? simulateAcceleration(committed, ratios, params, { stopAt: traceStop, tMax: 60, accelCap, marks: [60, 100] }) : null;
+    const committedTop = committedValid ? topSpeedFor(committed, ratios, params) * 3.6 : null;
+    const committedGrade = committedValid && vGrade > 0 ? gradeabilityAt(committed, ratios, params, vGrade) : null;
+    const committedPowerKw = committedValid ? committed.peakTorque * committed.baseRpm * 2 * Math.PI / 60 / 1000 : null;
+
+    // Curves for charts.
+    const rpmSpan = Math.max(maxRpm, committedValid ? committed.maxRpm : 0) * 1.02;
+    const motorCurve = Array.from({ length: 81 }, (_, i) => {
+      const rpm = rpmSpan * i / 80, w = rpm * 2 * Math.PI / 60;
+      const rt = motorTorqueAt(required, rpm), ct = committedValid ? motorTorqueAt(committed, rpm) : null;
+      return { rpm, requiredTorque: rpm <= maxRpm ? rt : null, requiredPower: rpm <= maxRpm ? rt * w / 1000 : null, committedTorque: committedValid && rpm <= committed.maxRpm ? ct : null, committedPower: committedValid && rpm <= committed.maxRpm ? ct * w / 1000 : null };
+    });
+    const speedSpan = Math.max(vMax * 3.6, committedTop || 0) * 1.1;
+    const committedGears = committedValid ? ratios.map((ratio, index) => ({
+      gear: index + 1, ratio,
+      points: Array.from({ length: 61 }, (_, i) => {
+        const rpm = committed.maxRpm * i / 60, speed = rpm * 2 * Math.PI / 60 / ratio * params.wheelRadius * 3.6;
+        const wheelTorque = motorTorqueAt(committed, rpm) * ratio * params.efficiency;
+        return { speed, wheelTorque, wheelPower: wheelTorque * (speed / 3.6) / params.wheelRadius / 1000 };
+      })
+    })) : [];
+    const requiredEnvelope = Array.from({ length: 81 }, (_, i) => {
+      const speed = speedSpan * i / 80, best = bestWheelForce(required, ratios, params, speed / 3.6);
+      return { speed, wheelTorque: best.force * params.wheelRadius || null, wheelPower: best.force * speed / 3.6 / 1000 || null };
+    });
+    const roadCurve = Array.from({ length: 61 }, (_, i) => {
+      const speed = speedSpan * i / 60, ms = speed / 3.6;
+      const level = roadLoadForce(ms, params), graded = roadLoadForce(ms, params, grade);
+      return { speed, levelTorque: level * params.wheelRadius, gradeTorque: graded * params.wheelRadius, levelPower: level * ms / 1000, gradePower: graded * ms / 1000 };
+    });
+    return {
+      ok: true,
+      ratioSource: linked ? "linked" : "manual",
+      ratios,
+      params,
+      cgHeight,
+      requirements,
+      governing,
+      peakTorque: result(peakTorque, "N·m", `Minimum motor peak torque; set by ${governing.label}`),
+      peakPower: result(peakPowerKw, "kW", "Peak torque × base speed"),
+      baseRpm: result(baseRpm, "rpm", "Maximum RPM divided by the constant-power speed ratio"),
+      maxRpm: result(maxRpm, "rpm", "Motor speed at the top-speed target in the tallest ratio"),
+      launchWheelTorque: result(peakTorque * ratios[0] * params.efficiency, "N·m", "Peak motor torque × first overall ratio × driveline efficiency"),
+      launchAccel: result((peakTorque * ratios[0] * params.efficiency / params.wheelRadius - roadLoadForce(0, params)) / (params.mass * params.inertiaFactor) / G, "g", "Uncapped standing-start acceleration with the required motor"),
+      wheelieLimit: result(wheelieLimit === null ? null : wheelieLimit / G, "g", "Rigid-body wheelie threshold from linked CG: (CG x − rear axle x) / CG height"),
+      gradeTorque: result(gradePoint ? gradePoint.motorTorque : null, "N·m", gradePoint ? `Continuous motor torque on the grade in gear ${gradePoint.gear}` : "No grade target entered"),
+      gradePower: result(gradePoint ? gradePoint.powerKw : null, "kW", "Continuous motor power on the grade at the grade speed"),
+      topSpeedPower: result(roadAtVmax * vMax / params.efficiency / 1000, "kW", "Motor power to hold the top-speed target on level road"),
+      requiredTimes: requiredRun.times,
+      committed: committedValid ? { ...committed, peakPowerKw: committedPowerKw, times: committedRun.times, topSpeed: committedTop, gradeability: committedGrade } : null,
+      curves: { motor: motorCurve, committedGears, requiredEnvelope, road: roadCurve, requiredRun: requiredRun.trace, committedRun: committedRun ? committedRun.trace : [], gradePoint, vMaxPoint: { rpm: maxRpm, torque: peakTorque / cpsr, powerKw: roadAtVmax * vMax / params.efficiency / 1000 } },
+      proposal: { maxTorque: Math.ceil(peakTorque), baseRpm: Math.round(baseRpm), maxRpm: Math.round(maxRpm) }
+    };
+  }
+  function fmtNum(value, digits = 1) { return Number.isFinite(Number(value)) ? String(Number(Number(value).toFixed(digits))) : "—"; }
+
+  // ---- Braking ---------------------------------------------------------------------------
+  function pistonArea(diaSpec, count, architecture) {
+    const sizes = String(diaSpec).split("/").map(Number).filter(value => value > 0);
+    if (!sizes.length || !(count >= 1)) return null;
+    const meanArea = sizes.reduce((sum, d) => sum + Math.PI * d * d / 4, 0) / sizes.length;
+    const opposed = architecture !== "floating";
+    return (opposed ? count / 2 : count) * meanArea;
+  }
+  function brakeHardware(b, side) {
+    const k = name => b[`${side}${name}`];
+    const discOd = Number(k("DiscOd")), padHeight = Number(k("PadHeight"));
+    const effectiveRadius = discOd / 2 - padHeight / 2;
+    return {
+      side,
+      leverRatio: Number(k("LeverRatio")),
+      mcBore: Number(k("McBore")),
+      mcArea: Math.PI * Math.pow(Number(k("McBore")), 2) / 4,
+      pistonArea: pistonArea(k("PistonDia"), Number(k("PistonCount")), k("Architecture")),
+      padFriction: Number(k("PadFriction")),
+      discOd, padHeight, effectiveRadius,
+      hydraulicEfficiency: Number(k("HydraulicEfficiency"))
+    };
+  }
+  // Input effort and pressure chain for a wheel brake torque (N·m).
+  function brakeChain(hw, wheelTorque) {
+    const clamp = wheelTorque / (2 * hw.padFriction * hw.effectiveRadius / 1000);
+    const pressure = clamp / hw.pistonArea; // N/mm²
+    const inputForce = pressure * hw.mcArea / (hw.leverRatio * hw.hydraulicEfficiency);
+    return { clamp, pressureBar: pressure * 10, inputKg: inputForce / G, inputN: inputForce };
+  }
+  function brakingCase(vehicle, b, front, rear) {
+    const mass = vehicle.mass, weight = mass * G, phi = vehicle.rearKg / mass, x = vehicle.cgHeight / vehicle.wheelbase;
+    const mu = Number(b.roadFriction), decel = Number(b.targetDecel);
+    const stoppie = phi / x; // deceleration (g) at which the rear unloads completely
+    const transfer = mass * decel * x;
+    const frontOnly = Math.min(mu * (1 - phi) / Math.max(1e-9, 1 - mu * x), stoppie);
+    const rearOnly = mu * phi / (1 + mu * x);
+    const combined = Math.min(mu, stoppie);
+    const vTest = Number(b.testSpeed) / 3.6;
+    const stop = a => a > 0 ? Number(b.freeRunCoefficient) * Number(b.testSpeed) + vTest * vTest / (2 * a * G) : null;
+    const frontTorque = mass * frontOnly * G * vehicle.frontRadius / 1000;
+    const rearTorque = mass * rearOnly * G * vehicle.rearRadius / 1000;
+    const decelForTarget = Math.min(decel, stoppie);
+    const frontShare = 1 - phi + decelForTarget * x;
+    const targetFront = brakeChain(front, mass * decelForTarget * frontShare * G * vehicle.frontRadius / 1000);
+    const targetRear = brakeChain(rear, mass * decelForTarget * Math.max(0, phi - decelForTarget * x) * G * vehicle.rearRadius / 1000);
+    const slipTable = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9].map(m => ({ mu: m, front: m * weight * (1 - phi + m * x), rear: Math.max(0, m * weight * (phi - m * x)) }));
+    return {
+      ...vehicle, phi, x, stoppie,
+      dynamicFrontKg: vehicle.frontKg + transfer,
+      dynamicRearKg: vehicle.rearKg - transfer,
+      frontOnly, rearOnly, combined,
+      frontOnlyStoppieLimited: frontOnly >= stoppie - 1e-12,
+      stopFront: stop(frontOnly), stopRear: stop(rearOnly), stopCombined: stop(combined),
+      frontTorque, rearTorque,
+      front: brakeChain(front, frontTorque),
+      rear: brakeChain(rear, rearTorque),
+      targetDecel: decelForTarget, targetFrontShare: frontShare, targetFront, targetRear,
+      slipTable,
+      curves: {
+        ideal: Array.from({ length: 41 }, (_, i) => { const a = Math.min(stoppie, 1.2) * i / 40; return { decel: a, front: a * weight * (1 - phi + a * x), rear: Math.max(0, a * weight * (phi - a * x)) }; }),
+        frontLock: [0, weight].map(fr => ({ rear: fr, front: (mu * weight * (1 - phi) + mu * x * fr) / Math.max(1e-9, 1 - mu * x) })),
+        rearLock: { atZeroFront: mu * weight * phi / (1 + mu * x), slope: -mu * x / (1 + mu * x) },
+        isoDecel: weight * decel,
+        effort: Array.from({ length: 31 }, (_, i) => {
+          const af = frontOnly * i / 30, ar = rearOnly * i / 30;
+          const fc = brakeChain(front, mass * af * G * vehicle.frontRadius / 1000), rc = brakeChain(rear, mass * ar * G * vehicle.rearRadius / 1000);
+          return { frontDecel: af, lever: fc.inputKg, frontBar: fc.pressureBar, rearDecel: ar, pedal: rc.inputKg, rearBar: rc.pressureBar };
+        }),
+        stopping: Array.from({ length: 25 }, (_, i) => {
+          const kmh = 5 * (i + 1), ms = kmh / 3.6, s = a => Number(b.freeRunCoefficient) * kmh + ms * ms / (2 * a * G);
+          return { speed: kmh, front: s(frontOnly), rear: s(rearOnly), combined: s(combined) };
+        })
+      }
+    };
+  }
+  function braking(state, massCases) {
+    const b = state.braking;
+    if (!b) return invalid("Braking inputs are missing.");
+    const front = brakeHardware(b, "front"), rear = brakeHardware(b, "rear");
+    for (const hw of [front, rear]) {
+      const label = hw.side === "front" ? "Front" : "Rear";
+      if (![hw.leverRatio, hw.mcBore, hw.padFriction, hw.discOd, hw.hydraulicEfficiency].every(value => value > 0) || !(hw.pistonArea > 0)) return invalid(`${label} brake hardware needs positive lever ratio, bore, piston size and count, pad friction, disc diameter and hydraulic efficiency.`);
+      if (!(hw.padHeight > 0 && hw.effectiveRadius > 0)) return invalid(`${label} pad height must be positive and smaller than the disc diameter.`);
+      if (hw.hydraulicEfficiency > 1) return invalid(`${label} hydraulic efficiency must be in (0, 1].`);
+    }
+    if (!(Number(b.roadFriction) > 0) || !(Number(b.targetDecel) > 0) || !(Number(b.testSpeed) > 0) || !(Number(b.freeRunCoefficient) >= 0)) return invalid("Road friction, target deceleration and test speed must be positive; the free-run coefficient cannot be negative.");
+    const s = state.stance;
+    const frontTyre = tyre(s.frontTyreWidth, s.frontTyreAspect, s.frontRim), rearTyre = tyre(s.rearTyreWidth, s.rearTyreAspect, s.rearRim);
+    if (!frontTyre.ok || !rearTyre.ok) return invalid("Braking needs valid tyre sizes from Stance.");
+    const groundZ = Number(s.rearAxleZ) - rearTyre.radius;
+    const caseFrom = masses => masses?.ok ? { mass: masses.totalMass, frontKg: masses.frontLoadKg, rearKg: masses.rearLoadKg, cgHeight: masses.cgZ - groundZ, wheelbase: Number(s.wheelbase), frontRadius: frontTyre.radius, rearRadius: rearTyre.radius } : null;
+    const solo = caseFrom(massCases?.["Solo rider"]), duals = caseFrom(massCases?.["Rider + pillion"]);
+    if (!solo || !duals) return invalid("Braking needs current Solo rider and Rider + pillion mass properties.");
+    if (!(solo.cgHeight > 0 && duals.cgHeight > 0)) return invalid("Linked CG height must be above the ground plane.");
+    return brakingFromVehicles(b, solo, duals, front, rear);
+  }
+  function brakingFromVehicles(b, soloVehicle, dualsVehicle, front = brakeHardware(b, "front"), rear = brakeHardware(b, "rear")) {
+    const solo = brakingCase(soloVehicle, b, front, rear), duals = brakingCase(dualsVehicle, b, front, rear);
+    return {
+      ok: true,
+      front, rear, solo, duals,
+      frontEffectiveRadius: result(front.effectiveRadius, "mm", "Disc OD / 2 − pad height / 2"),
+      rearEffectiveRadius: result(rear.effectiveRadius, "mm", "Disc OD / 2 − pad height / 2"),
+      frontPistonArea: result(front.pistonArea, "mm²", "Piston area acting on one pad face"),
+      rearPistonArea: result(rear.pistonArea, "mm²", "Piston area acting on one pad face"),
+      frontOnlyDecel: result(solo.frontOnly, "g", "Front-only adhesion limit, solo"),
+      rearOnlyDecel: result(solo.rearOnly, "g", "Rear-only adhesion limit, solo"),
+      stopFront: result(solo.stopFront, "m", `Front-only stopping distance from ${b.testSpeed} km/h, solo`),
+      leverLockup: result(solo.front.inputKg, "kgf", "Hand-lever force at front lock-up, solo"),
+      pedalLockup: result(solo.rear.inputKg, "kgf", "Foot-pedal force at rear lock-up, solo"),
+      frontPressure: result(solo.front.pressureBar, "bar", "Front master-cylinder pressure at lock-up, solo")
     };
   }
 
@@ -1042,9 +1485,10 @@
     const minus = JSON.parse(JSON.stringify(state));
     plus[path[0]][path[1]] = Number(plus[path[0]][path[1]]) + step;
     minus[path[0]][path[1]] = Number(minus[path[0]][path[1]]) - step;
-    const baseResults = calculate(base, false);
-    const plusResults = calculate(plus, false);
-    const minusResults = calculate(minus, false);
+    // Sensitivity outputs do not read motor sizing or braking, so the perturbed solves skip them.
+    const baseResults = calculate(base, false, true);
+    const plusResults = calculate(plus, false, true);
+    const minusResults = calculate(minus, false, true);
     const pick = output => ({
       trail: output.steering?.groundTrail?.value,
       loadedRake: output.sag?.loadedRake?.value,
@@ -1080,7 +1524,7 @@
     return { ok: true, parameter: state.sensitivity.parameter, step, rows, proposalOnly: true };
   }
 
-  function calculate(state, includeSensitivity = true) {
+  function calculate(state, includeSensitivity = true, skipStudies = false) {
     const massCases = {
       Kerb: componentMassProperties(state, "Kerb"),
       "Solo rider": componentMassProperties(state, "Solo rider"),
@@ -1097,6 +1541,8 @@
     const vehicleResult = vehicleStudy(state, gearingResult, massProperties);
     const electricalResult = electrical(state, gearingResult, massProperties);
     const batteryResult = batteryStudy(state, electricalResult);
+    const motorResult = skipStudies ? null : motorSizing(state, gearingResult, massProperties);
+    const brakingResult = skipStudies ? null : braking(state, massCases);
     const outputs = {
       massProperties,
       massCases,
@@ -1108,11 +1554,13 @@
       powertrain: gearingResult,
       vehicle: vehicleResult,
       electrical: electricalResult,
-      battery: batteryResult
+      battery: batteryResult,
+      motor: motorResult,
+      braking: brakingResult
     };
     if (includeSensitivity) outputs.sensitivity = sensitivity(state, calculate);
     return outputs;
   }
 
-  global.EngineeringCore = { calculate, tyre, ergonomics, steering, suspension, componentMassProperties, sag, antiSquat, gearing, vehicleStudy, batteryPack, solveDischarge, electrical, batteryStudy, sensitivity, round, clamp };
+  global.EngineeringCore = { calculate, tyre, motorSizing, simulateAcceleration, motorTorqueAt, roadLoadForce, braking, brakingFromVehicles, brakeHardware, pistonArea, linksForCentre, centreForLinks, sprocketDiameters, ergonomics, steering, suspension, componentMassProperties, sag, antiSquat, gearing, vehicleStudy, batteryPack, solveDischarge, electrical, batteryStudy, sensitivity, round, clamp };
 })(window);
