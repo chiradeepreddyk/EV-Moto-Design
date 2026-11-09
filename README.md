@@ -1,6 +1,6 @@
 # Moto Geometry
 
-Moto Geometry is a self-contained browser application implementing the product contract in `Moto_Geometry_PRD_v1.3`, extended to twelve modules. It links package, geometry, suspension, braking, mass properties, transmission, motor sizing, battery studies, and Energy & E/E concept closure through one governed working configuration.
+Moto Geometry is a self-contained browser application implementing the product contract in `Moto_Geometry_PRD_v1.3`, extended to eleven modules (Vehicle calculators was folded into Motor sizing). It links package, geometry, suspension, braking, mass properties, transmission, motor sizing, battery studies, and Energy & E/E concept closure through one governed working configuration.
 
 Open `index.html` directly in a modern browser. No package installation, build step, external model, or network resource is required.
 
@@ -15,6 +15,8 @@ Steering, suspension, anti-squat, sag and powertrain include live solver-scaled 
 Motor sizing includes a small, versioned benchmark catalogue spanning Sport, Naked, Adventure and Touring references. Manufacturer-rated power, torque and any explicitly published final-drive data are shown with source links and missing fields are left blank. Benchmark deltas are descriptive context only and never create an engineering pass/fail result. Electrical study scenarios are intentionally limited to Drive, Charge and Off.
 
 The mechanical duty case (on Motor sizing) names an operating point used by Transmission, Battery and Energy & E/E. Its engineering definition is the entered torque, RPM, duration and gear. The Road, Urban, Grade and Performance names do not silently inject preset assumptions.
+
+Every tab uses the same three columns: **inputs** on the left (with a list of linked values and their source tab), **results** in the middle (headline numbers, construction diagram, charts, tables) and **engineering notes** on the right (why the result matters, a typical-range check for the selected vehicle category, and how it is calculated). The Architecture closure page collects every out-of-range result into one chief-engineer watch-list. Typical ranges are indicative context from Foale, Cossalter and published specifications, not requirements.
 
 ## Application files
 

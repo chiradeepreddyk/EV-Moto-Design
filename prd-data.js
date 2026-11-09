@@ -2,18 +2,17 @@
   "use strict";
 
   const tabs = [
-    { id: "stance", ordinal: 1, label: "Stance", purpose: "Establish vehicle identity, the master packaging frame, tyre envelope, rider and pillion package, and mechanical load-case context." },
-    { id: "steering", ordinal: 2, label: "Steering geometry", purpose: "Solve unladen front-end geometry, steering kinematics, load-transfer screens and coordinate closure." },
-    { id: "suspension", ordinal: 3, label: "Suspension geometry", purpose: "Define fork and rear-suspension hardpoints, architecture, kinematics, motion ratio, wheel rate and travel sweeps." },
-    { id: "anti_squat", ordinal: 4, label: "Anti-squat", purpose: "Evaluate the drive-force line and swingarm relationship through rear travel using linked chassis and final-drive data." },
-    { id: "sensitivity", ordinal: 5, label: "Sensitivity & tuning", purpose: "Quantify local and swept response to dimensions, hardpoints, adjustments and tolerances without overwriting the baseline." },
-    { id: "sag", ordinal: 6, label: "Sag & outputs", purpose: "Define spring models and load cases, solve quasi-static sag and publish loaded vehicle geometry." },
-    { id: "braking", ordinal: 7, label: "Braking", purpose: "Size front and rear brake hardware against linked axle loads and CG height: adhesion limits, stopping distance, clamp force, line pressure and lever effort." },
-    { id: "powertrain", ordinal: 8, label: "Transmission", purpose: "Own the ratio stack, sprockets and chain: overall ratios, road speed, chain length and links for the real hardpoints, sprocket sizes and chain loading." },
-    { id: "motor_sizing", ordinal: 9, label: "Motor sizing", purpose: "Back-solve the motor torque, power and speed needed for the performance targets through the linked or manual ratio, and own the committed motor envelope." },
-    { id: "vehicle_calculators", ordinal: 10, label: "Vehicle calculators", purpose: "Run transparent, reversible speed, RPM, torque, power, tractive-force and power-to-weight studies." },
-    { id: "battery_calculators", ordinal: 11, label: "Battery calculators", purpose: "Explore capacity, range, topology, charge time, discharge duration, C-rate and charger proposals." },
-    { id: "electrical", ordinal: 12, label: "Energy & E/E Integration", purpose: "Close electrical component selection, topology, state power, mass, CG and package with the mechanical configuration." }
+    { id: "stance", ordinal: 1, label: "Stance", purpose: "Package frame, tyres, rider and pillion: mass, weight distribution and CG height for every load case." },
+    { id: "steering", ordinal: 2, label: "Steering geometry", purpose: "Rake, trail and clamp offset; how trail moves with fork travel and under braking; lean-angle clearance." },
+    { id: "suspension", ordinal: 3, label: "Suspension geometry", purpose: "Fork and rear hardpoints: leverage ratio, progression and wheel rate through travel, and the load–deflection curves." },
+    { id: "anti_squat", ordinal: 4, label: "Anti-squat", purpose: "Chain-pull versus load-transfer balance through rear travel, read at the rider-sag point that governs drive behaviour." },
+    { id: "sensitivity", ordinal: 5, label: "Sensitivity & tuning", purpose: "Which outputs move, and by how much, when one hardpoint or adjuster changes within its tolerance." },
+    { id: "sag", ordinal: 6, label: "Sag & outputs", purpose: "Spring models and preload solved to static and rider sag, ride frequencies and the loaded geometry for each load case." },
+    { id: "braking", ordinal: 7, label: "Braking", purpose: "Brake hardware sized against linked axle loads and CG height: adhesion limits, stopping distance, line pressure and lever effort." },
+    { id: "powertrain", ordinal: 8, label: "Transmission", purpose: "Ratio stack, sprockets and chain: overall ratios, road speed, chain length and links for the real hardpoints, chain loading." },
+    { id: "motor_sizing", ordinal: 9, label: "Motor sizing", purpose: "Road load and performance targets back-solved into the motor torque, power and speed, and the committed motor envelope." },
+    { id: "battery_calculators", ordinal: 10, label: "Battery calculators", purpose: "Range, consumption against speed, charge time against charger power, runtime and an S×P pack proposal." },
+    { id: "electrical", ordinal: 11, label: "Energy & E/E Integration", purpose: "Pack, HV and LV architecture: terminal voltage under load, LV power budget, mass and package closure." }
   ];
 
   const defaults = {
@@ -65,8 +64,8 @@
       shinLength: 445,
       torsoLean: 12,
       riderMass: 75,
-      pillionMass: 0,
-      luggageMass: 0,
+      pillionMass: 70,
+      luggageMass: 10,
       gliderMass: 150,
       gliderCGX: 55,
       gliderCGZ: 105,
@@ -74,6 +73,8 @@
       handlebarWidth: 760,
       handlebarSweep: 12,
       pegLateral: 175,
+      pegTipLateral: 245,
+      bellyHalfWidth: 130,
       tankHalfWidth: 155,
       exhaustX: -165,
       exhaustZ: -115,
@@ -90,10 +91,7 @@
       bracketSpan: 190,
       steeringAngle: 30,
       cornerSpeed: 40,
-      cornerRadius: 35,
-      brakingDecel: 0.8,
-      forkSpringRate: 10,
-      forkPreload: 8
+      cornerRadius: 35
     },
     suspension: {
       forkLength: 740,
@@ -214,11 +212,6 @@
       rearHydraulicEfficiency: 0.9
     },
     vehicle: {
-      studyGear: 3,
-      studyRpm: 6000,
-      studyTorque: 65,
-      targetSpeed: 100,
-      targetGrade: 10,
       rollingResistance: 0.015,
       dragCoefficientArea: 0.55,
       airDensity: 1.225
@@ -326,6 +319,47 @@
     padFriction: [{ value: 0.35, label: "Organic / NAO · μ 0.35" }, { value: 0.4, label: "Ceramic · μ 0.40" }, { value: 0.42, label: "Semi-metallic · μ 0.42" }, { value: 0.48, label: "Sintered road · μ 0.48" }, { value: 0.55, label: "Sintered track · μ 0.55" }]
   };
 
+
+  // Open-ended limits use ±Infinity.
+  // Indicative production ranges used only as context in each tab's Engineering notes rail.
+  // They are not requirements: a value outside a band is a prompt to check intent, not a failure.
+  // Sources: Foale, Motorcycle Handling and Chassis Design (2nd ed.); Cossalter, Motorcycle Dynamics (2nd ed.);
+  // published production specifications; UN R78 control-force limits; common suspension set-up practice.
+  const benchmarkBands = {
+    rake: { Sport: [22.5, 25], Naked: [23.5, 26], Adventure: [25, 28], Touring: [25, 28], Cruiser: [28, 34] },
+    trail: { Sport: [88, 102], Naked: [95, 110], Adventure: [100, 125], Touring: [100, 120], Cruiser: [110, 150] },
+    wheelbase: { Sport: [1340, 1430], Naked: [1380, 1480], Adventure: [1480, 1600], Touring: [1480, 1650], Cruiser: [1550, 1750] },
+    kerbFrontShare: { Sport: [51, 55], Naked: [49, 53], Adventure: [47, 52], Touring: [46, 51], Cruiser: [43, 48] },
+    leanClearance: { Sport: [50, Infinity], Naked: [45, Infinity], Adventure: [42, Infinity], Touring: [40, Infinity], Cruiser: [30, Infinity] },
+    riderSag: [25, 35],
+    pillionSag: [25, 45],
+    staticSagFront: [10, 25],
+    staticSagRear: [5, 15],
+    frontFrequency: [1.2, 2.0],
+    rearFrequency: [1.4, 2.3],
+    frequencyRatio: [1.0, 1.25],
+    antiSquatAtSag: { Sport: [95, 125], Naked: [80, 120], Adventure: [70, 110], Touring: [80, 115], Cruiser: [60, 100] },
+    linkageProgression: [10, 35],
+    directProgression: [-5, 15],
+    groundReach: [-40, 60],
+    trailUnderBraking: [70, 130],
+    frontSprocketTeeth: [14, Infinity],
+    wrapAngle: [120, Infinity],
+    teethEngaged: [5, Infinity],
+    chainSafetyFactor: [8, Infinity],
+    chainSpeed: [-Infinity, 25],
+    topGearOvertall: [-Infinity, 15],
+    leverForce: [4, 15],
+    pedalForce: [10, 35],
+    constantPowerRatio: [2, 4],
+    powerToWeight: { Sport: [200, 380], Naked: [150, 320], Adventure: [110, 220], Touring: [100, 200], Cruiser: [60, 150] },
+    acChargeCRate: [-Infinity, 0.5],
+    dcdcHeadroomPercent: [20, Infinity],
+    terminalSagPercent: [-Infinity, 10],
+    cableCurrentDensity: [-Infinity, 5],
+    prechargeTime: [0.1, 1.0]
+  };
+
   const sourceNotes = {
     trail: "Positive trail supplies a restoring tendency. Higher trail generally increases straight-line stability and steering effort while reducing manoeuvrability. Rake, tyre, wheelbase and axle load must be judged together.",
     motionRatio: "Motion ratio is shock displacement divided by wheel displacement. For locally constant geometry, wheel rate = spring rate × motion ratio².",
@@ -336,5 +370,5 @@
     electricalBoundary: "Electrical results are concept screens. They do not establish thermal life, fault interruption, protection coordination, insulation, EMC, cybersecurity, functional safety, homologation or production release."
   };
 
-  global.PRD_DATA = { tabs, defaults, componentDefaults, finalDriveCatalogue, brakeCatalogue, sourceNotes, version: "1.3" };
+  global.PRD_DATA = { tabs, defaults, componentDefaults, finalDriveCatalogue, brakeCatalogue, benchmarkBands, sourceNotes, version: "1.3" };
 })(window);

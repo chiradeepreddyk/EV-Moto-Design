@@ -404,3 +404,47 @@ table.dense tr.section-row th { padding-top: 14px; color: var(--navy); backgroun
 .compact-grid { margin-top: 10px; gap: 16px; }
 .chart-legend i.dashed { width: 16px; height: 0; border-top: 2px dashed; border-radius: 0; }
 @media (max-width: 560px) { .linked-list div { grid-template-columns: 1fr; } .linked-list dd { text-align: left; } .kpi-mini { grid-template-columns: 1fr; } }
+
+/* ---- Three-column tab layout: inputs | results | engineering notes ---- */
+.layout3 { display: grid; gap: 14px; align-items: start; grid-template-columns: minmax(290px, 330px) minmax(0, 1fr) minmax(270px, 310px); grid-template-areas: "in out notes"; }
+.layout3 > .col { min-width: 0; display: grid; gap: 14px; align-content: start; }
+.layout3 > .col > * { margin: 0; }
+.col-inputs { grid-area: in; }
+.col-results { grid-area: out; }
+.col-notes { grid-area: notes; position: sticky; top: 92px; max-height: calc(100vh - 110px); overflow: auto; }
+.col-inputs .fields { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.col-inputs .field-row { grid-template-columns: minmax(0, 1fr) 54px; gap: 5px; }
+.col-inputs .field label { font-size: 11px; }
+.col-inputs .unit-label { font-size: 10px; }
+.col-inputs .panel, .col-notes .panel { padding: 16px; }
+.col-results .grid.equal { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.col-results .kpi-strip { margin-bottom: 0; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+.view > .panel { margin-top: 14px; }
+@media (max-width: 1599px) {
+  .layout3 { grid-template-columns: minmax(290px, 330px) minmax(0, 1fr); grid-template-rows: auto 1fr; grid-template-areas: "in out" "notes out"; }
+  .col-notes { position: static; max-height: none; overflow: visible; }
+  .col-results .grid.equal { grid-template-columns: 1fr; }
+}
+@media (max-width: 1100px) {
+  .layout3 { grid-template-columns: 1fr; grid-template-areas: "in" "out" "notes"; }
+}
+
+/* Engineering notes rail */
+.notes-panel { background: #fbfaf5; }
+.notes-panel h3 { font-size: 15px; }
+.notes-why { margin: 0 0 4px; color: #33464f; font-size: 12.5px; line-height: 1.55; }
+.notes-list { margin: 0; padding-left: 16px; color: #40525d; font-size: 12px; line-height: 1.5; }
+.notes-list li + li { margin-top: 6px; }
+.notes-foot { margin: 8px 0 0; color: var(--muted); font-size: 10.5px; line-height: 1.45; }
+table.checks { width: 100%; }
+table.checks th, table.checks td { padding: 6px 6px; font-size: 11.5px; vertical-align: middle; }
+table.checks thead th { font-size: 9.5px; }
+table.checks tbody th { color: #33464f; background: transparent; font: 700 11.5px/1.3 Inter, sans-serif; letter-spacing: 0; text-transform: none; text-align: left; }
+table.checks tbody th small { display: block; color: var(--muted); font-weight: 600; }
+table.checks a { color: var(--navy); }
+.chip { display: inline-block; padding: 2px 7px; border-radius: 999px; font: 800 9.5px/1.4 Inter, sans-serif; letter-spacing: .02em; white-space: nowrap; }
+.chip-in { color: var(--green); background: var(--green-soft); }
+.chip-low, .chip-high { color: var(--amber); background: var(--amber-soft); }
+.chip-na { color: var(--muted); background: #f0f2ef; }
+.view > .local-context { margin-bottom: 14px; }
+.flow-lane { max-width: 100%; overflow-x: auto; }

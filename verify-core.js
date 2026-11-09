@@ -36,19 +36,18 @@ function interpolateShockTravel(points, wheelTravel) {
 
 const canonicalTabs = [
   "stance", "steering", "suspension", "anti_squat", "sensitivity", "sag", "braking",
-  "powertrain", "motor_sizing", "vehicle_calculators", "battery_calculators", "electrical"
+  "powertrain", "motor_sizing", "battery_calculators", "electrical"
 ];
 check(JSON.stringify(PRD_DATA.tabs.map(tab => tab.id)) === JSON.stringify(canonicalTabs), "PRD tab IDs and order must remain exact");
 
 const defaultState = fixture();
 const defaultOutputs = EngineeringCore.calculate(defaultState);
 check(PRD_DATA.tabs.every((tab, index) => tab.ordinal === index + 1), "Tab ordinals must follow tab order");
-for (const key of ["massProperties", "ergonomics", "steering", "suspension", "sag", "antiSquat", "powertrain", "vehicle", "battery", "electrical", "sensitivity", "motor", "braking"]) {
+for (const key of ["massProperties", "ergonomics", "steering", "suspension", "sag", "antiSquat", "powertrain", "battery", "electrical", "sensitivity", "motor", "braking"]) {
   check(defaultOutputs[key]?.ok === true, `Default fixture must close ${key}: ${defaultOutputs[key]?.error || "unknown error"}`);
 }
 near(defaultOutputs.electrical.electricalMass.value, defaultOutputs.massProperties.electricalMass, 1e-9, "Electrical mass must be counted once in Mass Properties");
 near(defaultOutputs.electrical.massReconciliation.value, 0, 1e-9, "Electrical mass reconciliation");
-near(defaultOutputs.antiSquat.reciprocalCheck.value, 1, 1e-9, "Anti-squat reciprocal identity");
 near(defaultOutputs.powertrain.dutyEnergy.value, defaultOutputs.powertrain.shaftPower.value * defaultState.powertrain.dutyDurationMinutes / 60, 1e-9, "Named-duty energy must integrate the entered duration");
 check(defaultOutputs.powertrain.dutyCase.gear === defaultState.powertrain.dutyGear, "Named duty must retain its selected gear");
 near(defaultOutputs.sag.expectedFrontForkStaticSag.value, defaultOutputs.sag.loadCases.Kerb.frontForkSag, 1e-9, "Expected front static sag must use calculated fork compression");
@@ -228,7 +227,7 @@ singleSpeed.powertrain.gear1 = 3.3;
 singleSpeed.powertrain.dutyGear = 1;
 const singleOut = E.calculate(singleSpeed);
 check(singleOut.powertrain.ok && singleOut.powertrain.rows.length === 1, "Single-speed transmission must solve with one ratio");
-check(singleOut.electrical.ok && singleOut.battery.ok && singleOut.vehicle.ok, "Single-speed transmission must keep downstream studies solvable");
+check(singleOut.electrical.ok && singleOut.battery.ok && singleOut.motor.ok, "Single-speed transmission must keep downstream studies solvable");
 const beltState = fixture();
 beltState.powertrain.chainSize = "belt14m";
 beltState.powertrain.chainPitch = 14;
@@ -284,6 +283,35 @@ const lockFront = (frontLockAtIdeal[1].front - frontLockAtIdeal[0].front) / (fro
 rel(lockFront, ideal.front, "Front-lock line must pass through the ideal curve at the road μ");
 check(defaultOutputs.braking.ok, `Default braking must close: ${defaultOutputs.braking.error}`);
 
+// --- Chief-engineer audit fixes and new results.
+const S = defaultOutputs.steering, M = defaultOutputs.massProperties, cases = defaultOutputs.massCases;
+check(!("vehicle" in defaultOutputs) && !PRD_DATA.tabs.some(tab => tab.id === "vehicle_calculators"), "Vehicle calculators is retired into Motor sizing");
+check(!("wheelieLimit" in S) && !("brakingTransfer" in S) && !("forkSpringRate" in PRD_DATA.defaults.steering), "Steering must not keep its own CG-height screens or a duplicate fork spring");
+near(M.cgHeight, M.cgZ - (defaultState.stance.rearAxleZ - EngineeringCore.tyre(defaultState.stance.rearTyreWidth, defaultState.stance.rearTyreAspect, defaultState.stance.rearRim).radius), 1e-9, "CG height must be measured from the ground plane, not the frame origin");
+near(M.frontShare, M.frontLoadKg / M.totalMass * 100, 1e-9, "Front share must be the front axle fraction");
+check(cases["Rider + pillion"].totalMass > cases["Solo rider"].totalMass, "Default pillion mass must make the duals case differ from solo");
+check(S.leanClearance.value > 0 && S.leanClearance.value < 80 && S.leanClearance.value === Math.min(S.pegLean, S.bellyLean), "Lean clearance must be the first contact point to touch down");
+const leanCheck = (lat, z) => { const h = z - M.groundZ, r = S.crownRadius, t = S.leanClearance.value * Math.PI / 180; return (h - r) * Math.cos(t) - lat * Math.sin(t) + r; };
+near(leanCheck(S.leanLimitedBy === "Footpeg tip" ? defaultState.stance.pegTipLateral : defaultState.stance.bellyHalfWidth, S.leanLimitedBy === "Footpeg tip" ? defaultState.stance.pegZ : defaultState.stance.lowestPointZ), 0, 1e-6, "The limiting point must sit exactly on the ground at the lean clearance angle");
+check(S.requiredLean.value > S.idealLean.value, "A finite tyre crown must increase the lean needed for the same corner");
+const brakeGeo = defaultOutputs.sag.brakingGeometry;
+near(brakeGeo.transferKg, cases["Solo rider"].totalMass * defaultState.braking.targetDecel * cases["Solo rider"].cgHeight / defaultState.stance.wheelbase, 1e-9, "Braking load transfer must use the Braking target deceleration and ground CG height");
+check(brakeGeo.dive > 0 && brakeGeo.trail < defaultOutputs.sag.loadCases["Solo rider"].trail, "Braking must compress the fork and reduce trail");
+near(defaultOutputs.antiSquat.sagTravel.value, defaultOutputs.sag.loadedGeometryInput.rearWheelDisplacement, 1e-9, "Anti-squat must be read at the solved rear sag");
+check(defaultOutputs.antiSquat.atSag.value <= defaultOutputs.antiSquat.start.value && defaultOutputs.antiSquat.atSag.value >= defaultOutputs.antiSquat.end.value, "Anti-squat at sag must lie between extension and full travel for this falling curve");
+near(defaultOutputs.sag.frequencyRatio.value, defaultOutputs.sag.rearFrequency.value / defaultOutputs.sag.frontFrequency.value, 1e-6, "Frequency ratio is rear over front");
+const cc = defaultOutputs.battery.consumptionCurve;
+const at80 = cc.points.find(point => point.speed === 80);
+const eta = defaultState.powertrain.drivelineEfficiency * defaultState.powertrain.motorEfficiency * defaultState.powertrain.inverterEfficiency;
+near(at80.traction, EngineeringCore.roadLoadForce(80 / 3.6, { mass: M.totalMass, rollingResistance: defaultState.vehicle.rollingResistance, airDensity: defaultState.vehicle.airDensity, dragCoefficientArea: defaultState.vehicle.dragCoefficientArea }) * (80 / 3.6) / eta / 80, 1e-6, "Consumption curve must use the Motor sizing road-load model");
+check(cc.matchSpeed === null || Math.abs(cc.points.reduce((best, point) => Math.abs(point.speed - cc.matchSpeed) < Math.abs(best.speed - cc.matchSpeed) ? point : best).traction - defaultState.battery.consumption) < 15, "Named-consumption speed must sit where the curve crosses the named Wh/km");
+near(defaultOutputs.electrical.lvBudget.reduce((sum, item) => sum + item.continuous, 0), defaultOutputs.electrical.lvContinuous.value, 1e-9, "LV budget rows must sum to the solved continuous LV load");
+const vc = defaultOutputs.electrical.voltageCurve, pk = defaultOutputs.electrical.pack, Iduty = defaultOutputs.electrical.busCurrent.value;
+near(pk.nominalV - Iduty * pk.resistanceOhm, defaultOutputs.electrical.terminalVoltage.value, 0.05, "Voltage curve model must reproduce the solved terminal voltage at the duty current");
+check(vc.points[0].nominal === pk.nominalV && vc.points.every((point, index) => index === 0 || point.nominal <= vc.points[index - 1].nominal), "Terminal voltage must fall with current");
+check(Object.values(PRD_DATA.benchmarkBands).every(entry => (Array.isArray(entry) ? [entry] : Object.values(entry)).every(band => band.length === 2 && band[0] < band[1])), "Every typical-range band must be an ordered pair");
+check(defaultOutputs.sensitivity.rows.some(row => row.output === "antiSquatAtSag"), "Sensitivity must track anti-squat at sag, not at extension");
+
 const expectedCurrentRuntime = defaultOutputs.electrical.pack.capacityAh *
   ((defaultState.electrical.socMax - defaultState.electrical.socMin) / 100) *
   defaultState.battery.capacityDerate / defaultState.battery.runtimeCurrent;
@@ -304,10 +332,10 @@ check(new Set(assetRefs.map(ref => ref.version)).size === 1,
 for (const ref of assetRefs) check(fs.existsSync(ref.file), `index.html references a missing asset: ${ref.file}`);
 check(/transmission-benchmarks\.js/.test(html), "index.html must load the transmission benchmark catalogue");
 const appSource = fs.readFileSync("app.js", "utf8");
-for (const diagram of ["steeringDiagram", "suspensionDiagram", "antiSquatDiagram", "sagDiagram", "powertrainDiagram", "electricalNetwork", "renderMotor", "renderBraking"]) check(appSource.includes(`function ${diagram}`), `${diagram} must remain implemented`);
+for (const diagram of ["steeringDiagram", "suspensionDiagram", "antiSquatDiagram", "sagDiagram", "powertrainDiagram", "electricalNetwork", "renderMotor", "renderBraking", "page", "notesRail", "barChart", "renderBattery", "renderElectrical"]) check(appSource.includes(`function ${diagram}`), `${diagram} must remain implemented`);
 check(appSource.includes('const electricalScenarios = [["drive","Drive"],["charge","Charge"],["off","Off"]]'), "Electrical scenario selector must contain exactly Drive, Charge and Off");
 check(!appSource.includes("Measured sag checks"), "Measured sag UI must be replaced by calculated expected sag");
-check(appSource.includes("Front fork sag") && appSource.includes("Rear shock sag"), "Sag UI must report suspension-member sag");
+check(appSource.includes("Sag is member stroke") && appSource.includes("Rear shock"), "Sag UI must report suspension-member sag");
 check(!appSource.includes('metric("Fork air pressure"') && !appSource.includes('metric("Fork seal margin"'), "Sag UI must not show fork-air pressure or seal-margin cards");
 check(!/front wheel sag|rear wheel sag|expected front sag|expected rear sag/i.test(appSource), "Sag UI must not present wheel displacement as sag");
 check(appSource.includes("data-electrical-network") && appSource.includes("electricalNodePositions") && appSource.includes("reset-network-layout"), "Electrical network must support presentation-only node positioning and reset");
