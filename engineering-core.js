@@ -116,21 +116,31 @@
     const requiredOffset = wheel.radius * Math.sin(a) - targetTrail * Math.cos(a);
     const roadSteer = Math.atan(Math.cos(a) * Math.tan(steer));
     const turnRadius = Number(state.stance.wheelbase) / Math.max(1e-9, Math.tan(roadSteer)) / 1000;
-    const mass = Number(state.derived?.massProperties?.totalMass || state.stance.gliderMass + state.stance.riderMass);
-    const cgHeight = Number(state.derived?.massProperties?.cgZ || 400);
-    const brakingTransferKg = mass * Number(state.steering.brakingDecel) * cgHeight / Math.max(1, state.stance.wheelbase);
-    const frontSpringTotal = Math.max(1e-9, Number(state.steering.forkSpringRate) * 2);
-    const springDive = Math.max(0, (brakingTransferKg * G - Number(state.steering.forkPreload) * frontSpringTotal) / frontSpringTotal);
     const offsetDelta = Number(state.steering.underBracketOffset) - offset;
     const forkAxisDelta = deg(Math.atan2(offsetDelta, Number(state.steering.bracketSpan)));
-    const verticalForkRate = frontSpringTotal * Math.pow(Math.cos(a), 2);
     const rearX = Number(state.stance.rearAxleX);
     const frontX = rearX + Number(state.stance.wheelbase);
-    const cgX = Number(state.derived?.massProperties?.cgX || 0);
-    const wheelieLimit = (cgX - rearX) / Math.max(1e-9, cgHeight);
-    const stoppieLimit = (frontX - cgX) / Math.max(1e-9, cgHeight);
+    // Lean clearance: the bike rolls on a round tyre crown, so a point at lateral offset y and height h
+    // touches down when (h − r)·cosθ − y·sinθ + r = 0, with r the crown radius (half the mean section width).
+    const massCase = state.derived?.massCases?.["Solo rider"] || state.derived?.massProperties;
+    const cgHeight = Number(massCase?.cgHeight) > 0 ? Number(massCase.cgHeight) : null;
+    const rearTyreCrown = tyre(state.stance.rearTyreWidth, state.stance.rearTyreAspect, state.stance.rearRim);
+    const crown = (Number(state.stance.frontTyreWidth) + Number(state.stance.rearTyreWidth)) / 4;
+    const groundZForLean = Number(state.stance.rearAxleZ) - (rearTyreCrown.ok ? rearTyreCrown.radius : 0);
+    const touchDown = (lateral, z) => {
+      const h = Number(z) - groundZForLean, y = Number(lateral);
+      if (!(h > 0) || !(y > 0)) return null;
+      const amplitude = Math.hypot(h - crown, y), phase = Math.atan2(y, h - crown), c = -crown / amplitude;
+      return Math.abs(c) <= 1 ? deg(Math.acos(c) - phase) : null;
+    };
+    const pegLean = touchDown(state.stance.pegTipLateral, state.stance.pegZ);
+    const bellyLean = touchDown(state.stance.bellyHalfWidth, state.stance.lowestPointZ);
+    const leanCandidates = [["Footpeg tip", pegLean], ["Lowest point (belly)", bellyLean]].filter(([, value]) => value !== null);
+    const leanLimit = leanCandidates.length ? leanCandidates.reduce((a, b) => b[1] < a[1] ? b : a) : null;
     const speedMs = Number(state.steering.cornerSpeed) / 3.6;
     const idealLean = deg(Math.atan2(speedMs * speedMs, G * Math.max(1e-9, Number(state.steering.cornerRadius))));
+    // A wide crown moves the contact patch inboard, so the real bike must lean further than the point-mass angle.
+    const requiredLean = cgHeight && cgHeight > crown ? idealLean + deg(Math.asin(clamp(crown * Math.sin(rad(idealLean)) / (cgHeight - crown), -1, 1))) : idealLean;
     // Head tube (steering) axis and fork-tube axis are only parallel when the two clamp offsets are equal.
     // Both lines are evaluated at the handlebar-grip height so the reported C-C distance is a solved value
     // rather than a restatement of the entered upper offset.
@@ -154,17 +164,15 @@
       flop: result(flop, "mm", "Steering-head lowering at the entered steering angle"),
       requiredOffset: result(requiredOffset, "mm", "Upper offset required to meet target ground trail"),
       turnRadius: result(turnRadius, "m", "Kinematic low-speed turn radius; tyre slip is not modelled"),
-      brakingTransfer: result(brakingTransferKg, "kg eq.", "Quasi-static braking load transfer screen"),
-      springDive: result(springDive, "mm", "Spring-only fork dive screen", { note: "Damping, bump stop, tyre compliance and chassis flexibility are not evaluated." }),
       offsetDelta: result(offsetDelta, "mm", "Under-bracket offset minus upper offset"),
       forkAxisDelta: result(forkAxisDelta, "deg", "Construction angle implied by offset delta over bracket span; it does not silently alter trail convention"),
       forkRake: result(rake + forkAxisDelta, "deg", "Fork-axis angle from vertical implied by the entered clamp construction"),
-      normalTrailRatio: result(normalTrail / wheel.radius, "ratio", "Normal trail divided by front tyre radius"),
-      axleLoadCorrectedRatio: result(normalTrail / wheel.radius * (state.derived?.massProperties?.frontLoadKg || 0) / Math.max(1e-9, mass), "ratio", "Normal-trail ratio weighted by current front axle-load fraction"),
-      verticalForkRate: result(verticalForkRate, "N/mm vertical", "Two-leg spring rate reduced by rake cosine squared"),
-      wheelieLimit: result(wheelieLimit, "g", "Rigid-body front-lift acceleration screen from current CG and rear contact"),
-      stoppieLimit: result(stoppieLimit, "g", "Rigid-body rear-lift deceleration screen from current CG and front contact"),
-      idealLean: result(idealLean, "deg", "Point-mass ideal lean at entered speed and turn radius")
+      idealLean: result(idealLean, "deg", "Point-mass lean angle at the corner study speed and radius"),
+      requiredLean: result(requiredLean, "deg", "Lean needed at the corner study including the tyre-crown correction (Cossalter)"),
+      leanClearance: result(leanLimit ? leanLimit[1] : null, "deg", leanLimit ? `Geometric lean angle at which the ${leanLimit[0].toLowerCase()} touches down, unladen` : "Enter footpeg tip and belly half-width in Stance"),
+      leanLimitedBy: leanLimit ? leanLimit[0] : null,
+      pegLean, bellyLean, crownRadius: crown,
+      leanMargin: result(leanLimit ? leanLimit[1] - requiredLean : null, "deg", "Lean clearance minus lean needed at the corner study")
     };
   }
 
@@ -269,7 +277,6 @@
       wheelRateMid: result(springRate * midMR * midMR, "N/mm", "Linked rear K1 multiplied by local motion ratio squared"),
       wheelRateEnd: result(springRate * endMR * endMR, "N/mm", "Linked rear K1 multiplied by local motion ratio squared"),
       frontStrokeMargin: result(Number(state.suspension.frontWheelToMetal) - Number(state.stance.frontTravel), "mm", "Front wheel-to-metal travel minus target front travel"),
-      forkAirCompression: result(airCompressionRatio, "ratio", "Initial fork-air volume divided by end-stroke volume"),
       forkEndPressure: result(endPressureBar, "bar abs", "Ideal isothermal fork-air pressure at usable stroke from a 1 bar absolute start"),
       frontTravelSweep
     } : invalid(finalAirVolume <= 0 ? "Fork swept volume consumes the entered air volume before full stroke." : "Shock motion is zero or non-finite for the entered rear construction.");
@@ -300,6 +307,8 @@
     const frontLoadKg = totalMass * (cgX - rearX) / (frontX - rearX);
     const rearLoadKg = totalMass - frontLoadKg;
     const reconciled = frontLoadKg >= 0 && rearLoadKg >= 0;
+    const rearTyreForGround = tyre(s.rearTyreWidth, s.rearTyreAspect, s.rearRim);
+    const groundZ = Number(s.rearAxleZ) - (rearTyreForGround.ok ? rearTyreForGround.radius : 0);
     return {
       ok: reconciled,
       error: reconciled ? null : "Calculated CG lies outside the tyre-contact support span.",
@@ -309,6 +318,9 @@
       cgZ,
       frontLoadKg,
       rearLoadKg,
+      frontShare: frontLoadKg / totalMass * 100,
+      groundZ,
+      cgHeight: cgZ - groundZ,
       wetMass: Number(s.gliderMass) + components.reduce((sum, item) => sum + Number(item.mass || 0), 0),
       targetDelta: Number(s.gliderMass) + components.reduce((sum, item) => sum + Number(item.mass || 0), 0) - Number(s.targetWetMass),
       electricalMass: components.reduce((sum, item) => sum + Number(item.mass || 0), 0),
@@ -415,6 +427,28 @@
       };
     };
     const loadCases = Object.fromEntries(Object.entries(massCases).map(([name, record]) => [name, solveNamedCase(record)]));
+    // Geometry under braking: quasi-static load transfer m·a·h/wb onto the springs, solo rider.
+    // Spring-only: damping, tyre compliance and chassis flex are not evaluated.
+    const solo = massCases["Solo rider"];
+    const brakeDecel = Number(state.braking?.targetDecel);
+    let brakingGeometry = null;
+    if (solo?.ok && brakeDecel > 0 && solo.cgHeight > 0 && loadCases["Solo rider"]?.ok) {
+      const transferKg = solo.totalMass * brakeDecel * solo.cgHeight / wheelbase;
+      const front = solveSagForce(frontForce, maxFront, Math.max(0, solo.frontLoadKg + transferKg - Number(state.sag.frontUnsprungMass)) * G);
+      const rear = solveSagForce(rearForce, maxRear, Math.max(0, solo.rearLoadKg - transferKg - Number(state.sag.rearUnsprungMass)) * G);
+      const brakePitch = Math.atan2(rear.travel - front.travel, wheelbase);
+      const brakeRake = Number(state.stance.targetRake) + deg(brakePitch);
+      brakingGeometry = {
+        decel: brakeDecel, transferKg,
+        frontTravel: front.travel, rearTravel: rear.travel,
+        dive: front.travel - loadCases["Solo rider"].frontWheelDisplacement,
+        frontBottomed: front.bottomed,
+        rake: brakeRake,
+        trail: (frontTyre.radius * Math.sin(rad(brakeRake)) - Number(state.steering.upperOffset)) / Math.cos(rad(brakeRake)),
+        wheelbase: wheelbase * Math.cos(brakePitch),
+        pitch: deg(brakePitch)
+      };
+    }
     // Load vs deflection at the wheel, sampled on the same force laws the equilibrium solver uses.
     // Front is fork coil + fork air; rear is spring x motion ratio + bump stop, so both are wheel-referred
     // and directly comparable on one pair of axes.
@@ -477,6 +511,7 @@
       rearWheelRate: result(rearRate, "N/mm", "Local rear wheel-force gradient"),
       frontFrequency: result(Math.sqrt(Math.max(0, frontRate * 1000 / frontSprungMass)) / (2 * Math.PI), "Hz", "Undamped front ride-frequency screen"),
       rearFrequency: result(Math.sqrt(Math.max(0, rearRate * 1000 / rearSprungMass)) / (2 * Math.PI), "Hz", "Undamped rear ride-frequency screen"),
+      frequencyRatio: result(Math.sqrt(Math.max(0, rearRate / rearSprungMass)) / Math.max(1e-9, Math.sqrt(Math.max(0, frontRate / frontSprungMass))), "rear / front", "Rear ride frequency divided by front; flat-ride guidance puts the rear slightly above the front"),
       expectedFrontForkStaticSag: expectedCaseValue("Kerb", "frontForkSag", "front fork"),
       expectedRearShockStaticSag: expectedCaseValue("Kerb", "rearShockSag", "rear shock"),
       expectedFrontForkRiderSag: expectedCaseValue("Solo rider", "frontForkSag", "front fork"),
@@ -491,6 +526,7 @@
       loadedClearance: result(loadedClearance, "mm", "Ground clearance after average suspension displacement"),
       pitch: result(deg(pitch), "deg", "Chassis pitch caused by unequal front/rear sag"),
       loadCurves,
+      brakingGeometry,
       loadCases
     };
   }
@@ -575,13 +611,15 @@
     return finite(anti) ? { ok: true, wheelTravel, anti, ratio, angle: deg(Math.atan(squatTan)), instant, contact, axle: kin.axle, tangent, drive, frontPitchRadius, rearPitchRadius } : invalid("Anti-squat result is non-finite.");
   }
 
-  function antiSquat(state, masses, kinematics) {
+  function antiSquat(state, masses, kinematics, sagResult) {
     if (!masses?.ok || !kinematics?.ok) return invalid("Anti-squat requires current Mass Properties and Suspension results.");
     const max = kinematics.usableWheelTravel.value;
     const steps = clamp(Math.round(Number(state.antiSquat.analysisSteps)), 3, 100);
     const samples = Array.from({ length: steps + 1 }, (_, index) => antiSquatAt(state, masses, max * index / steps));
     if (samples.some(item => !item.ok)) return samples.find(item => !item.ok);
     const values = samples.map(item => item.anti);
+    const sagTravel = Number(sagResult?.loadedGeometryInput?.rearWheelDisplacement);
+    const sagPoint = Number.isFinite(sagTravel) ? antiSquatAt(state, masses, clamp(sagTravel, 0, max)) : null;
     let neutralCrossover = null;
     for (let index = 1; index < samples.length; index += 1) {
       const a = samples[index - 1];
@@ -597,8 +635,8 @@
       start: result(samples[0].anti, "%", "Foale anti-squat at extension", { note: global.PRD_DATA?.sourceNotes.antiSquat }),
       mid: result(samples[Math.round(steps / 2)].anti, "%", "Foale anti-squat at mid travel"),
       end: result(samples.at(-1).anti, "%", "Foale anti-squat at full usable travel"),
-      squatRatio: result(samples[0].ratio, "ratio", "Cossalter squat ratio at extension"),
-      reciprocalCheck: result(samples[0].anti / 100 * samples[0].ratio, "identity", "(anti-squat / 100) x squat ratio"),
+      atSag: result(sagPoint?.ok ? sagPoint.anti : null, "%", `Foale anti-squat at the ${masses.loadCase || "active"} load-case rear sag; the number that governs on-throttle behaviour`),
+      sagTravel: result(sagTravel, "mm wheel", "Rear wheel displacement at the active load-case sag"),
       range: result(Math.max(...values) - Math.min(...values), "% points", "Maximum minus minimum anti-squat through entered travel"),
       averageGradient: result((samples.at(-1).anti - samples[0].anti) / Math.max(1e-9, max), "%/mm", "End-to-end average anti-squat gradient"),
       neutralCrossover: result(neutralCrossover, "mm travel", "Interpolated wheel travel where the construction crosses 100%; blank when no crossover exists"),
@@ -801,40 +839,7 @@
     };
   }
 
-  function vehicleStudy(state, gearingResult, masses) {
-    if (!gearingResult?.ok || !masses?.ok) return invalid("Vehicle studies require current Powertrain and Mass Properties results.");
-    const v = state.vehicle;
-    const gear = clamp(Math.round(Number(v.studyGear)), 1, gearingResult.rows.length);
-    const row = gearingResult.rows[gear - 1];
-    const speed = Number(v.studyRpm) / row.overallRatio * gearingResult.rearTyre.circumference / 1e6 * 60;
-    const wheelTorque = Number(v.studyTorque) * row.overallRatio * Number(state.powertrain.drivelineEfficiency);
-    const tractiveForce = wheelTorque / (gearingResult.rearTyre.radius / 1000);
-    const shaftPower = Number(v.studyTorque) * Number(v.studyRpm) * 2 * Math.PI / 60 / 1000;
-    const wheelRpmAtTarget = Number(v.targetSpeed) * 1e6 / 60 / gearingResult.rearTyre.circumference;
-    const requiredRpm = wheelRpmAtTarget * row.overallRatio;
-    const speedMs = Number(v.targetSpeed) / 3.6;
-    const rolling = masses.totalMass * G * Number(v.rollingResistance);
-    const aero = 0.5 * Number(v.airDensity) * Number(v.dragCoefficientArea) * speedMs * speedMs;
-    const grade = masses.totalMass * G * Math.sin(Math.atan(Number(v.targetGrade) / 100));
-    const requiredPower = (rolling + aero + grade) * speedMs / 1000;
-    const requiredTorque = requiredRpm > 0 ? requiredPower * 1000 / (requiredRpm * 2 * Math.PI / 60 * Number(state.powertrain.drivelineEfficiency)) : null;
-    return {
-      ok: true,
-      speed: result(speed, "km/h", "Road speed from linked ratio, tyre and study RPM"),
-      wheelTorque: result(wheelTorque, "N·m", "Ideal wheel torque after entered driveline efficiency"),
-      tractiveForce: result(tractiveForce, "N", "Ideal tyre-contact tractive force"),
-      requiredPower: result(requiredPower, "kW", "First-order road-load power at target speed and grade"),
-      shaftPower: result(shaftPower, "kW", "Study shaft torque multiplied by angular speed"),
-      requiredRpm: result(requiredRpm, "rpm", "Shaft RPM required for target speed in selected gear"),
-      requiredTorque: result(requiredTorque, "N·m", "Ideal shaft torque required to deliver road-load power at required RPM"),
-      wheelRpm: result(Number(v.studyRpm) / row.overallRatio, "rpm", "Wheel RPM from study shaft RPM and overall ratio"),
-      wattsPerKg: result(shaftPower * 1000 / masses.totalMass, "W/kg", "Study shaft power divided by active load-case mass"),
-      kilowattsPerTonne: result(shaftPower / (masses.totalMass / 1000), "kW/t", "Study shaft power divided by active load-case mass"),
-      horsepowerPerTonne: result(shaftPower * 1.34102209 / (masses.totalMass / 1000), "hp/t", "Metric study power expressed as mechanical horsepower per tonne"),
-      kilogramsPerKw: result(masses.totalMass / Math.max(1e-9, shaftPower), "kg/kW", "Active load-case mass per study kilowatt"),
-      proposal: { targetSpeed: Number(v.targetSpeed), studyGear: gear, studyRpm: Number(v.studyRpm), studyTorque: Number(v.studyTorque) }
-    };
-  }
+
 
   // ---- Motor sizing --------------------------------------------------------------------
   // Envelope: constant torque to base RPM, constant power to max RPM, nothing beyond max RPM.
@@ -1248,6 +1253,12 @@
       terminalVoltage: result(tractionEnabled ? (discharge.ok ? discharge.terminalVoltage : null) : pack.nominalV, "V", tractionEnabled ? "Loaded pack terminal voltage" : "Nominal pack voltage; no traction discharge solved in this state"),
       packLoss: result(tractionEnabled && discharge.ok ? discharge.lossKw : chargeEnabled ? chargeCurrent * chargeCurrent * pack.resistanceOhm / 1000 : 0, "kW", "Lumped pack I^2R loss in the selected state"),
       packChargePower: result(packChargePower, "kW", "Committed OBC output limited by OBC efficiency and pack charge-current limit"),
+      lvBudget: scenario === "off" ? [] : activeLv.map(item => ({ label: item.label, continuous: Number(item.continuous || 0), peak: Number(item.peak || 0), essential: Boolean(item.essential) })),
+      voltageCurve: (() => {
+        const maxI = Math.max(pack.dischargeLimitA || 0, tractionEnabled && discharge.ok ? discharge.current * 1.2 : 0, 1);
+        const socMinOcv = pack.minV + (pack.maxV - pack.minV) * Number(state.electrical.socMin) / 100;
+        return { cutoff: pack.minV, socMinOcv, limitA: pack.dischargeLimitA, points: Array.from({ length: 41 }, (_, i) => { const I = maxI * i / 40; return { current: I, nominal: pack.nominalV - I * pack.resistanceOhm, lowSoc: socMinOcv - I * pack.resistanceOhm, lossKw: I * I * pack.resistanceOhm / 1000 }; }) };
+      })(),
       lvContinuous: result(lvContinuous, "W", `Enabled continuous LV load in ${scenario}`),
       lvPeak: result(lvPeak, "W", `Enabled peak LV load in ${scenario}`),
       dcdcHeadroom: result(headroom, "W", "Entered DC-DC capacity minus enabled continuous LV load"),
@@ -1391,7 +1402,31 @@
     return issues;
   }
 
-  function batteryStudy(state, electricalResult) {
+  // Constant-speed, level-road energy use from the same road-load model Motor sizing uses.
+  // Traction consumption excludes LV so it is directly comparable with the named consumption input.
+  function consumptionCurve(state, masses, deliveredKWh, lvKw, namedWhPerKm) {
+    if (!masses?.ok) return null;
+    const v = state.vehicle || {}, p = state.powertrain || {};
+    const eta = Number(p.drivelineEfficiency) * Number(p.motorEfficiency) * Number(p.inverterEfficiency);
+    if (!(eta > 0) || !(Number(v.dragCoefficientArea) >= 0)) return null;
+    const maxKmh = Math.max(60, Math.ceil((Number(state.motor?.targetTopSpeed) || 130) / 10) * 10);
+    const points = [];
+    for (let kmh = 10; kmh <= maxKmh + 1e-9; kmh += 5) {
+      const ms = kmh / 3.6;
+      const wheelKw = (masses.totalMass * G * Number(v.rollingResistance) + 0.5 * Number(v.airDensity) * Number(v.dragCoefficientArea) * ms * ms) * ms / 1000;
+      const traction = wheelKw / eta * 1000 / kmh;
+      const total = traction + lvKw * 1000 / kmh;
+      points.push({ speed: kmh, traction, total, range: deliveredKWh * 1000 / total, batteryKw: wheelKw / eta + lvKw });
+    }
+    let matchSpeed = null;
+    for (let i = 1; i < points.length; i += 1) {
+      const a = points[i - 1], b = points[i];
+      if ((a.traction - namedWhPerKm) * (b.traction - namedWhPerKm) <= 0 && a.traction !== b.traction) { matchSpeed = a.speed + (namedWhPerKm - a.traction) * (b.speed - a.speed) / (b.traction - a.traction); break; }
+    }
+    return { points, matchSpeed, efficiency: eta, mass: masses.totalMass };
+  }
+
+  function batteryStudy(state, electricalResult, masses) {
     if (!electricalResult?.pack) return invalid("Battery studies require a current committed pack.");
     const b = state.battery;
     const e = state.electrical;
@@ -1472,6 +1507,14 @@
       proposedEnergy,
       voltageDelta: proposedNominalV - Number(b.studyVoltage),
       energyMargin: proposedEnergy - requiredNominal,
+      consumptionCurve: consumptionCurve(state, masses, deliveredEnergy, lvContinuousKw, Number(b.consumption)),
+      chargeCurve: Array.from({ length: 23 }, (_, index) => {
+        const obcKw = 1 + index;
+        const pack = Math.min(Math.min(supplyPower, obcKw) * chargeEfficiency, packChargeLimit);
+        return { obcKw, packKw: pack, hours: pack > 0 ? chargeEnergy / pack * Number(b.chargeTaperFactor) : null, supplyLimited: supplyPower < obcKw, packLimited: obcKw * chargeEfficiency > packChargeLimit };
+      }),
+      supplyLimitKw: supplyPower,
+      packChargeLimitKw: packChargeLimit,
       proposal: { series: requiredSeries, parallel: requiredParallel, chargerPower: Number(b.chargerPower), nominalVoltage: proposedNominalV, capacityAh: proposedAh, grossEnergyKWh: proposedEnergy, sourceElectricalRevision: state.meta.domainRevisions?.electrical || state.meta.revision, sourceDutyCaseRevision: state.meta.domainRevisions?.powertrain || state.meta.revision, downstreamReviewRequired: true }
     };
   }
@@ -1494,7 +1537,7 @@
       loadedRake: output.sag?.loadedRake?.value,
       loadedTrail: output.sag?.loadedTrail?.value,
       groundClearance: output.sag?.loadedClearance?.value,
-      antiSquat: output.antiSquat?.start?.value,
+      antiSquatAtSag: output.antiSquat?.atSag?.value,
       totalMass: output.massProperties?.totalMass,
       range: output.battery?.estimatedRange?.value,
       lvHeadroom: output.electrical?.dcdcHeadroom?.value
@@ -1536,11 +1579,10 @@
     const steeringResult = steering(workingState);
     const suspensionResult = suspension(state);
     const sagResult = sag(state, suspensionResult, massProperties, steeringResult, massCases);
-    const antiSquatResult = antiSquat(state, massProperties, suspensionResult);
+    const antiSquatResult = antiSquat(state, massProperties, suspensionResult, sagResult);
     const gearingResult = gearing(state, massProperties);
-    const vehicleResult = vehicleStudy(state, gearingResult, massProperties);
     const electricalResult = electrical(state, gearingResult, massProperties);
-    const batteryResult = batteryStudy(state, electricalResult);
+    const batteryResult = batteryStudy(state, electricalResult, massProperties);
     const motorResult = skipStudies ? null : motorSizing(state, gearingResult, massProperties);
     const brakingResult = skipStudies ? null : braking(state, massCases);
     const outputs = {
@@ -1552,7 +1594,6 @@
       sag: sagResult,
       antiSquat: antiSquatResult,
       powertrain: gearingResult,
-      vehicle: vehicleResult,
       electrical: electricalResult,
       battery: batteryResult,
       motor: motorResult,
@@ -1562,5 +1603,5 @@
     return outputs;
   }
 
-  global.EngineeringCore = { calculate, tyre, motorSizing, simulateAcceleration, motorTorqueAt, roadLoadForce, braking, brakingFromVehicles, brakeHardware, pistonArea, linksForCentre, centreForLinks, sprocketDiameters, ergonomics, steering, suspension, componentMassProperties, sag, antiSquat, gearing, vehicleStudy, batteryPack, solveDischarge, electrical, batteryStudy, sensitivity, round, clamp };
+  global.EngineeringCore = { calculate, tyre, motorSizing, simulateAcceleration, motorTorqueAt, roadLoadForce, braking, brakingFromVehicles, brakeHardware, pistonArea, linksForCentre, centreForLinks, sprocketDiameters, ergonomics, steering, suspension, componentMassProperties, sag, antiSquat, gearing, batteryPack, consumptionCurve, solveDischarge, electrical, batteryStudy, sensitivity, round, clamp };
 })(window);

@@ -8,23 +8,23 @@
   const groups = [
     ["Package", ["stance"]],
     ["Chassis", ["steering", "suspension", "anti_squat", "sensitivity", "sag", "braking"]],
-    ["Propulsion and studies", ["powertrain", "motor_sizing", "vehicle_calculators", "battery_calculators"]],
+    ["Propulsion and studies", ["powertrain", "motor_sizing", "battery_calculators"]],
     ["Energy and E/E", ["electrical"]]
   ];
-  const ownerTab = { antiSquat: "anti_squat", vehicle: "vehicle_calculators", battery: "battery_calculators", motor: "motor_sizing" };
+  const ownerTab = { antiSquat: "anti_squat", vehicle: "motor_sizing", battery: "battery_calculators", motor: "motor_sizing" };
   const tabFor = owner => ownerTab[owner] || owner;
   const dependencies = {
-    stance: ["steering", "suspension", "sag", "powertrain", "motor_sizing", "braking", "electrical", "sensitivity", "vehicle_calculators", "battery_calculators", "anti_squat"],
+    stance: ["steering", "suspension", "sag", "powertrain", "motor_sizing", "braking", "electrical", "sensitivity", "battery_calculators", "anti_squat"],
     steering: ["suspension", "sag", "sensitivity"],
     suspension: ["sag", "anti_squat", "sensitivity"],
     antiSquat: ["sensitivity"],
     sag: ["anti_squat", "sensitivity", "electrical"],
-    powertrain: ["motor_sizing", "vehicle_calculators", "anti_squat", "electrical", "battery_calculators"],
-    electrical: ["stance", "sag", "anti_squat", "motor_sizing", "braking", "vehicle_calculators", "battery_calculators", "sensitivity"],
-    motor: [],
-    braking: [],
+    powertrain: ["motor_sizing", "anti_squat", "electrical", "battery_calculators"],
+    electrical: ["stance", "sag", "steering", "anti_squat", "motor_sizing", "braking", "battery_calculators", "sensitivity"],
+    motor: ["battery_calculators"],
+    braking: ["steering", "sag"],
     battery: [],
-    vehicle: ["motor_sizing"],
+    vehicle: ["motor_sizing", "battery_calculators"],
     sensitivity: []
   };
 
@@ -114,7 +114,7 @@
       tabs: {
         stance: clone(state.stance), steering: clone(state.steering), suspension: clone(state.suspension),
         anti_squat: clone(state.antiSquat), sensitivity: clone(state.sensitivity), sag: clone(state.sag),
-        braking: clone(state.braking), powertrain: clone(state.powertrain), motor_sizing: clone(state.motor), vehicle_calculators: clone(state.vehicle),
+        braking: clone(state.braking), powertrain: clone(state.powertrain), motor_sizing: { ...clone(state.motor), roadLoad: clone(state.vehicle) },
         battery_calculators: clone(state.battery), electrical: clone(state.electrical)
       }
     };
@@ -125,7 +125,7 @@
       tabs: {
         steering: outputs.steering, suspension: outputs.suspension, anti_squat: outputs.antiSquat,
         sensitivity: outputs.sensitivity, sag: outputs.sag, braking: outputs.braking, powertrain: outputs.powertrain, motor_sizing: outputs.motor,
-        vehicle_calculators: outputs.vehicle, battery_calculators: outputs.battery, electrical: outputs.electrical
+        battery_calculators: outputs.battery, electrical: outputs.electrical
       }
     };
   }
@@ -416,11 +416,12 @@
       <header class="view-head"><p class="section-kicker">Architecture closure</p><h2>One governed motorcycle configuration</h2><p>Every result is tied to the active revision, coordinate frame, load case, duty case, electrical scenario and architecture variant. Central services aggregate derived results without stealing ownership from engineering tabs.</p></header>
       <div class="summary-strip">
         <div class="summary-card"><span>Total mass</span><strong>${fmt(m.totalMass,1)} kg</strong></div>
-        <div class="summary-card"><span>Vehicle CG</span><strong>${fmt(m.cgX,0)}, ${fmt(m.cgZ,0)} mm</strong></div>
+        <div class="summary-card"><span>CG height · front share</span><strong>${fmt(m.cgHeight,0)} mm · ${fmt(m.frontShare,1)}%</strong></div>
         <div class="summary-card"><span>Front / rear load</span><strong>${fmt(m.frontLoadKg,1)} / ${fmt(m.rearLoadKg,1)} kg</strong></div>
         <div class="summary-card"><span>Loaded trail</span><strong>${fmt(loaded?.loadedTrail?.value,1)} mm</strong></div>
         <div class="summary-card"><span>Open issues / stale</span><strong>${issueCount} / ${staleCount}</strong></div>
       </div>
+      <article class="panel" style="margin-bottom:14px"><h3>Chief-engineer watch-list</h3><p class="panel-intro">Every result outside its typical ${esc(category().toLowerCase())} range, across all tabs. Context, not pass/fail.</p>${(() => { const out = allChecks().filter(row => row.status === "low" || row.status === "high"); return out.length ? `<div class="table-wrap"><table class="checks"><thead><tr><th>Check</th><th class="numeric">Value</th><th class="numeric">Typical</th><th></th></tr></thead><tbody>${out.map(row => `<tr><th><a href="#${row.tab}">${esc(row.label)}</a> <small>${esc(DATA.tabs.find(t => t.id === row.tab)?.label || "")}</small></th><td class="numeric">${fmt(row.value, row.digits)} <small>${esc(row.unit)}</small></td><td class="numeric">${bandText(row.band, row.digits)}</td><td><span class="chip chip-${row.status}">${statusText[row.status]}</span></td></tr>`).join("")}</tbody></table></div>` : `<div class="notice success">Every checked result sits inside its typical range.</div>`; })()}</article>
       <div class="grid equal">
         <article class="panel"><h3>Central information</h3><p class="panel-intro">This context accompanies every producer-to-consumer exchange.</p><div class="table-wrap"><table><tbody>
           <tr><th>Configuration</th><td>${esc(state.meta.project)} · ${esc(state.meta.configuration)} · revision ${state.meta.revision}</td></tr>
@@ -555,78 +556,437 @@
     return `<div class="component-inspector"><h3>Selected component · ${esc(component.label)}</h3><p class="panel-intro">Edits update mass properties, package data and the active scenario budget immediately. Enabled scenarios use only drive, charge and off.</p><div class="fields">${field("category","Category","","text")}${field("mass","Mass","kg")}${field("x","Preferred X","mm")}${field("z","Preferred Z","mm")}${field("length","Envelope length","mm")}${field("width","Envelope width","mm")}${field("height","Envelope height","mm")}${field("continuous","Continuous power","W")}${field("peak","Peak power","W")}${field("inrush","Inrush power","W")}${field("standby","Standby power","W")}${field("sleep","Sleep power","W")}${field("states","Enabled scenarios","","text")}${field("provenance","Provenance","","text")}<div class="field"><label for="selected-essential-${index}">Essential load</label><select id="selected-essential-${index}" data-component="${index}" data-component-key="essential" aria-label="${esc(component.label)} Essential load"><option value="true" ${component.essential?"selected":""}>Yes</option><option value="false" ${component.essential?"":"selected"}>No</option></select></div></div></div>`;
   }
 
-  function renderStanceExpanded(tab) {
-    const m = outputs.massProperties;
-    const e = outputs.ergonomics;
-    const f = Core.tyre(state.stance.frontTyreWidth, state.stance.frontTyreAspect, state.stance.frontRim);
-    const r = Core.tyre(state.stance.rearTyreWidth, state.stance.rearTyreAspect, state.stance.rearRim);
-    return `<section class="view ${activeTab === tab.id ? "active" : ""}" id="view-${tab.id}">${viewHead(tab)}
-      <div class="grid two"><article class="panel"><h3>Master package inputs</h3><p class="panel-intro">Authoritative Stance values. Coordinates use the active master frame.</p><div class="fields">
-        ${input("stance.vehicleCategory","Vehicle category","",{type:"select",values:["Sport","Naked","Cruiser","Adventure","Touring"]})}
-        ${input("stance.wheelbase","Target wheelbase","mm")}${input("stance.targetRake","Target rake","deg",{step:"0.1"})}${input("stance.targetTrail","Target trail","mm")}
-        ${input("stance.groundClearance","Target ground clearance","mm")}${input("stance.frontTravel","Front travel target","mm")}${input("stance.rearTravel","Rear travel target","mm")}
-      </div><h3 style="margin-top:20px">Tyre geometry</h3><div class="fields">${input("stance.frontTyreWidth","Front width","mm")}${input("stance.frontTyreAspect","Front aspect","%")}${input("stance.frontRim","Front rim","in")}${input("stance.rearTyreWidth","Rear width","mm")}${input("stance.rearTyreAspect","Rear aspect","%")}${input("stance.rearRim","Rear rim","in")}</div>
-      <h3 style="margin-top:20px">Hardpoints</h3><div class="fields">${["rearAxleX","rearAxleZ","seatX","seatZ","gripX","gripZ","pegX","pegZ","lowestPointX","lowestPointZ"].map(key => input(`stance.${key}`, key.replace(/([A-Z])/g," $1"), "mm")).join("")}</div>
-      <h3 style="margin-top:20px">Load case and rider</h3><div class="fields">${input("stance.gliderMass","Mechanical glider mass","kg")}${input("stance.gliderCGX","Glider CG X","mm")}${input("stance.gliderCGZ","Glider CG Z","mm")}${input("stance.riderMass","Rider mass","kg")}${input("stance.pillionMass","Pillion mass","kg")}${input("stance.luggageMass","Luggage mass","kg")}${input("stance.riderHeight","Rider height","mm")}${input("stance.riderInseam","Rider inseam","mm")}${input("stance.riderShoulderWidth","Shoulder width","mm")}${input("stance.torsoLength","Torso length","mm")}${input("stance.upperArmLength","Upper arm","mm")}${input("stance.forearmLength","Forearm","mm")}${input("stance.thighLength","Thigh","mm")}${input("stance.shinLength","Shin","mm")}${input("stance.torsoLean","Torso lean","deg")}${input("stance.handlebarWidth","Handlebar width","mm")}${input("stance.handlebarSweep","Handlebar sweep","deg")}${input("stance.targetWetMass","Project wet-mass target","kg")}</div><h3 style="margin-top:20px">Clearance and pillion envelopes</h3><div class="fields">${input("stance.pegLateral","Peg / knee lateral centre","mm")}${input("stance.tankHalfWidth","Tank half-width","mm")}${input("stance.exhaustX","Exhaust centre X","mm")}${input("stance.exhaustZ","Exhaust centre Z","mm")}${input("stance.exhaustRadius","Exhaust envelope radius","mm")}${input("stance.mirrorHalfSpan","Mirror half-span","mm")}${input("stance.pillionSeatX","Pillion seat X","mm")}${input("stance.pillionSeatZ","Pillion seat Z","mm")}${input("stance.pillionPegX","Pillion peg X","mm")}${input("stance.pillionPegZ","Pillion peg Z","mm")}</div></article>
-      <div><article class="panel"><h3>Master-frame package view</h3><p class="panel-intro">Solver-scaled 2D coordinates and entered tyre diameters.</p>${svgVehicle()}</article>
-      <article class="panel"><h3>Stance and rider outputs</h3>${invalidNotice(m,"Mass Properties")}${invalidNotice(e,"Rider package")}<div class="metric-grid">${metric("Front tyre radius",{value:f.radius,unit:"mm",definition:"Nominal geometric radius"},{owner:"stance"})}${metric("Rear tyre radius",{value:r.radius,unit:"mm",definition:"Nominal geometric radius"},{owner:"stance"})}${metric("Front circumference",{value:f.circumference,unit:"mm",definition:"Nominal unloaded circumference"},{owner:"stance"})}${metric("Wet vehicle mass",{value:m.wetMass,unit:"kg",definition:"Glider plus selected electrical component mass; occupants excluded"},{owner:"stance"})}${metric("Active load-case mass",{value:m.totalMass,unit:"kg",definition:"Central Mass Properties aggregate"},{owner:"stance"})}${metric("CG X",{value:m.cgX,unit:"mm",definition:"Mass-weighted master-frame coordinate"},{owner:"stance"})}${metric("CG Z",{value:m.cgZ,unit:"mm",definition:"Mass-weighted master-frame coordinate"},{owner:"stance"})}${metric("Elbow angle",e?.elbowAngle,{owner:"stance"})}${metric("Knee angle",e?.kneeAngle,{owner:"stance"})}${metric("Hip angle",e?.hipAngle,{owner:"stance"})}${metric("Arm reach",e?.armReachUtilisation,{owner:"stance"})}${metric("Ground reach margin",e?.groundReachMargin,{owner:"stance"})}${metric("Knee to tank",e?.kneeTankClearance,{owner:"stance"})}${metric("Heel to exhaust",e?.heelExhaustClearance,{owner:"stance"})}${metric("Mirror to shoulder",e?.mirrorShoulderClearance,{owner:"stance"})}${metric("Pillion knee",e?.pillionKneeAngle,{owner:"stance"})}</div><div class="notice" style="margin-top:14px">Rider results are geometric screens. Joint comfort, soft tissue, control forces, clothing, visibility and physical validation remain not evaluated.</div></article></div></div>
-    </section>`;
+  // ---- Three-column page: inputs | results | engineering notes ----------------------------
+  // Every tab uses the same frame so an engineer always finds inputs on the left, the numbers
+  // and charts in the middle, and the "is this sensible?" context on the right.
+  function category() { return state.stance.vehicleCategory || "Naked"; }
+  function bandFor(key) {
+    const entry = DATA.benchmarkBands?.[key];
+    if (!entry) return null;
+    return Array.isArray(entry) ? entry : entry[category()] || null;
   }
+  function checkRow(tab, label, value, unit, key, digits = 1, hint = "") {
+    const band = Array.isArray(key) ? key : bandFor(key);
+    const v = value === null || value === undefined || value === "" ? NaN : Number(value);
+    const status = !Number.isFinite(v) || !band ? "na" : v < band[0] - 1e-9 ? "low" : v > band[1] + 1e-9 ? "high" : "in";
+    return { tab, label, value: Number.isFinite(v) ? v : null, unit, band, digits, status, hint };
+  }
+  function bandText(band, digits) {
+    if (!band) return "—";
+    const f = value => fmt(value, digits);
+    if (!Number.isFinite(band[1])) return `≥ ${f(band[0])}`;
+    if (!Number.isFinite(band[0])) return `≤ ${f(band[1])}`;
+    return `${f(band[0])} – ${f(band[1])}`;
+  }
+  const statusText = { in: "in range", low: "below", high: "above", na: "—" };
+  function checksTable(rows) {
+    return `<div class="table-wrap"><table class="checks"><thead><tr><th>Check</th><th class="numeric">Value</th><th class="numeric">Typical</th><th></th></tr></thead><tbody>${rows.map(row => `<tr title="${esc(row.hint)}"><th>${esc(row.label)}</th><td class="numeric">${row.value === null ? "—" : `${fmt(row.value, row.digits)}${row.unit ? ` <small>${esc(row.unit)}</small>` : ""}`}</td><td class="numeric">${bandText(row.band, row.digits)}</td><td><span class="chip chip-${row.status}">${statusText[row.status]}</span></td></tr>`).join("")}</tbody></table></div>`;
+  }
+  function notesRail(tabId, { why = "", how = [], extra = "", checksTitle = "" } = {}) {
+    const checks = tabChecks[tabId] ? tabChecks[tabId]() : [];
+    return `<article class="panel notes-panel"><h3>Engineering notes</h3>
+      ${why ? `<p class="notes-why">${why}</p>` : ""}
+      ${checks.length ? `<h4 class="subhead">${esc(checksTitle || `Typical range · ${category()}`)}</h4>${checksTable(checks)}<p class="notes-foot">Indicative production ranges (Foale; Cossalter; published specifications). Outside a range is a prompt to confirm intent, not a failure. Category is set on Stance.</p>` : ""}
+      ${how.length ? `<h4 class="subhead">How it is calculated</h4><ul class="notes-list">${how.map(item => `<li>${item}</li>`).join("")}</ul>` : ""}
+    </article>${extra}`;
+  }
+  function panel(title, body, intro = "", attrs = "") {
+    return `<article class="panel" ${attrs}><h3>${esc(title)}</h3>${intro ? `<p class="panel-intro">${intro}</p>` : ""}${body}</article>`;
+  }
+  function page(tab, { inputs, results, notes, kpis = "", study = false, top = "", after = "" }) {
+    return `<section class="view ${activeTab === tab.id ? "active" : ""}" id="view-${tab.id}">${viewHead(tab, study)}${top}
+      <div class="layout3"><div class="col col-inputs">${inputs}</div><div class="col col-results">${kpis}${results}</div><aside class="col col-notes" aria-label="Engineering notes">${notes}</aside></div>${after}</section>`;
+  }
+  function dataTable(head, rows, cls = "dense") {
+    return `<div class="table-wrap"><table class="${cls}"><thead><tr>${head.map((h, i) => `<th class="${i ? "numeric" : ""}">${h}</th>`).join("")}</tr></thead><tbody>${rows.map(r => `<tr>${r.map((c, i) => i ? `<td class="numeric">${c}</td>` : `<th>${c}</th>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+  }
+  const withUnit = (value, unit, digits = 1) => value === null || value === undefined || !Number.isFinite(Number(value)) ? "—" : `${fmt(value, digits)} <small>${unit}</small>`;
 
+  // Typical-range checks per tab. The closure page aggregates every row that falls outside.
+  const tabChecks = {
+    stance() {
+      const cases = outputs.massCases || {}, e = outputs.ergonomics;
+      return [
+        checkRow("stance", "Wheelbase", state.stance.wheelbase, "mm", "wheelbase", 0),
+        checkRow("stance", "Front weight, kerb", cases.Kerb?.frontShare, "%", "kerbFrontShare", 1, "Front axle share of kerb mass; sets steering feel and braking split"),
+        checkRow("stance", "Ground reach margin", e?.groundReachMargin?.value, "mm", "groundReach", 0, "Inseam minus seat height; negative means tip-toe")
+      ];
+    },
+    steering() {
+      const o = outputs.steering, g = outputs.sag?.brakingGeometry;
+      return [
+        checkRow("steering", "Rake", state.stance.targetRake, "°", "rake", 1),
+        checkRow("steering", "Ground trail", o?.groundTrail?.value, "mm", "trail", 1),
+        checkRow("steering", `Trail at ${fmt(state.braking.targetDecel, 2)} g braking`, g?.trail, "mm", "trailUnderBraking", 1, "Trail with the front compressed by braking load transfer"),
+        checkRow("steering", "Lean clearance", o?.leanClearance?.value, "°", "leanClearance", 1)
+      ];
+    },
+    suspension() {
+      const o = outputs.suspension;
+      return [checkRow("suspension", "Rear progression", o?.progression?.value, "%", state.suspension.rearArchitecture === "linkage" ? "linkageProgression" : "directProgression", 1, "Change in motion ratio from extension to full travel")];
+    },
+    anti_squat() { return [checkRow("anti_squat", "Anti-squat at rider sag", outputs.antiSquat?.atSag?.value, "%", "antiSquatAtSag", 0)]; },
+    sag() {
+      const o = outputs.sag, pill = o?.loadCases?.["Rider + pillion"], avail = o?.rearShockTravelAvailable?.value;
+      return [
+        checkRow("sag", "Front static sag", o?.expectedFrontForkStaticPercent?.value, "%", "staticSagFront", 0),
+        checkRow("sag", "Rear static sag", o?.expectedRearShockStaticPercent?.value, "%", "staticSagRear", 0),
+        checkRow("sag", "Front rider sag", o?.expectedFrontForkRiderPercent?.value, "%", "riderSag", 0),
+        checkRow("sag", "Rear rider sag", o?.expectedRearShockRiderPercent?.value, "%", "riderSag", 0),
+        checkRow("sag", "Rear sag, rider + pillion", pill && avail ? pill.rearShockSag / avail * 100 : null, "%", "pillionSag", 0),
+        checkRow("sag", "Front ride frequency", o?.frontFrequency?.value, "Hz", "frontFrequency", 2),
+        checkRow("sag", "Rear ride frequency", o?.rearFrequency?.value, "Hz", "rearFrequency", 2),
+        checkRow("sag", "Rear / front frequency", o?.frequencyRatio?.value, "", "frequencyRatio", 2, "Flat-ride guidance: rear slightly above front")
+      ];
+    },
+    braking() {
+      const o = outputs.braking;
+      return o?.ok ? [
+        checkRow("braking", "Lever force, front lock-up", o.solo.front.inputKg, "kgf", "leverForce", 1),
+        checkRow("braking", "Pedal force, rear lock-up", o.solo.rear.inputKg, "kgf", "pedalForce", 1),
+        checkRow("braking", `Lever force, ${fmt(state.braking.targetDecel, 2)} g`, o.solo.targetFront.inputKg, "kgf", "leverForce", 1)
+      ] : [];
+    },
+    powertrain() {
+      const o = outputs.powertrain, p = state.powertrain;
+      return o?.ok ? [
+        checkRow("powertrain", "Front sprocket", p.frontTeeth, "T", "frontSprocketTeeth", 0, "Below ~14 teeth chordal action and wear rise quickly"),
+        checkRow("powertrain", "Wrap, small sprocket", o.wrapAngle.value, "°", "wrapAngle", 0),
+        checkRow("powertrain", "Teeth engaged", o.teethEngaged.value, "", "teethEngaged", 1),
+        checkRow("powertrain", "Chain safety factor", o.chainSafetyFactor.value, "×", "chainSafetyFactor", 1),
+        checkRow("powertrain", "Chain speed", o.chainSpeed.value, "m/s", "chainSpeed", 1),
+        checkRow("powertrain", "Top gear over-tall by", outputs.motor?.committed?.topSpeed ? (o.kinematicTopSpeed.value / outputs.motor.committed.topSpeed - 1) * 100 : null, "%", "topGearOvertall", 0, "Speed at max RPM in top gear versus the road-load top speed of the committed motor")
+      ] : [];
+    },
+    motor_sizing() {
+      const pt = outputs.powertrain, m = outputs.massProperties;
+      return [
+        checkRow("motor_sizing", "Constant-power ratio", state.motor.constantPowerRatio, "", "constantPowerRatio", 2),
+        checkRow("motor_sizing", "Power-to-weight, committed", pt?.ok && m?.ok ? pt.peakPower.value / m.totalMass * 1000 : null, "kW/t", "powerToWeight", 0, `Committed peak power over the ${state.meta.loadCase} mass`)
+      ];
+    },
+    battery_calculators() { return [checkRow("battery_calculators", "AC charge C-rate", outputs.battery?.actualChargeCRate?.value, "C", "acChargeCRate", 2)]; },
+    electrical() {
+      const o = outputs.electrical, e = state.electrical;
+      const drive = state.meta.electricalScenario === "drive" && o?.pack;
+      return o?.ok ? [
+        checkRow("electrical", "DC-DC continuous headroom", Number(e.dcdcCapacity) > 0 ? o.dcdcHeadroom.value / Number(e.dcdcCapacity) * 100 : null, "%", "dcdcHeadroomPercent", 0),
+        checkRow("electrical", "Pack voltage drop at duty", drive && o.terminalVoltage.value ? (o.pack.nominalV - o.terminalVoltage.value) / o.pack.nominalV * 100 : null, "%", "terminalSagPercent", 1),
+        checkRow("electrical", "HV cable current density", o.currentDensity?.value, "A/mm²", "cableCurrentDensity", 2),
+        checkRow("electrical", "Precharge time", o.prechargeTime?.value, "s", "prechargeTime", 2)
+      ] : [];
+    }
+  };
+  function allChecks() { return Object.values(tabChecks).flatMap(fn => { try { return fn(); } catch (_) { return []; } }); }
+
+  // Horizontal bar chart: one row per label, one or more bars per row, optional reference band.
+  function barChart(canvas, cfg) {
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect(), ratio = window.devicePixelRatio || 1;
+    if (!rect.width || !rect.height) return;
+    canvas.width = rect.width * ratio; canvas.height = rect.height * ratio;
+    const ctx = canvas.getContext("2d"); ctx.scale(ratio, ratio);
+    const W = rect.width, H = rect.height, rows = cfg.rows || [];
+    if (!rows.length) return;
+    ctx.font = "700 10px Inter, system-ui";
+    const labelRoom = Math.max(30, ...rows.flatMap(row => row.bars.map(bar => ctx.measureText(bar.text ?? axisLabel(bar.value)).width))) + 12;
+    const pad = { l: cfg.labelWidth || 150, r: Math.min(W * 0.35, labelRoom), t: 10, b: 34 };
+    const values = rows.flatMap(row => row.bars.map(bar => bar.value)).filter(Number.isFinite);
+    const lo = Math.min(0, cfg.xMin ?? 0, ...values), rawHi = Math.max(...values, ...(cfg.band || []).filter(Number.isFinite), ...(cfg.refs || []).map(ref => ref.x), 1e-6);
+    if (cfg.band) cfg.band = cfg.band.map(value => Math.max(lo, Math.min(cfg.xMax ?? rawHi, value)));
+    const step = niceCeilStep((rawHi - lo) / 5), hi = cfg.xMax ?? Math.ceil(rawHi / step) * step;
+    const tx = x => pad.l + (x - lo) / Math.max(1e-9, hi - lo) * (W - pad.l - pad.r);
+    const slot = (H - pad.t - pad.b) / rows.length, barH = Math.min(18, slot * 0.7 / Math.max(1, rows[0].bars.length));
+    ctx.clearRect(0, 0, W, H); ctx.font = "11px Inter, system-ui";
+    if (cfg.band) { ctx.fillStyle = "rgba(31,107,80,.10)"; ctx.fillRect(tx(cfg.band[0]), pad.t, tx(cfg.band[1]) - tx(cfg.band[0]), H - pad.t - pad.b); }
+    ctx.strokeStyle = "#e3e6e2"; ctx.fillStyle = "#61717b"; ctx.textAlign = "center";
+    for (let x = Math.ceil(lo / step) * step; x <= hi + 1e-9; x += step) { const px = tx(x); ctx.beginPath(); ctx.moveTo(px, pad.t); ctx.lineTo(px, H - pad.b); ctx.stroke(); ctx.fillText(axisLabel(x), px, H - pad.b + 14); }
+    ctx.fillStyle = "#334650"; ctx.font = "600 11px Inter, system-ui"; ctx.fillText(cfg.xLabel || "", pad.l + (W - pad.l - pad.r) / 2, H - 6);
+    (cfg.refs || []).forEach(ref => { ctx.strokeStyle = ref.colour || "#6e56a0"; ctx.setLineDash([5, 4]); ctx.lineWidth = 1.4; ctx.beginPath(); ctx.moveTo(tx(ref.x), pad.t); ctx.lineTo(tx(ref.x), H - pad.b); ctx.stroke(); ctx.setLineDash([]); ctx.lineWidth = 1; if (ref.label) { ctx.fillStyle = ref.colour || "#6e56a0"; ctx.font = "700 10px Inter, system-ui"; ctx.textAlign = "left"; ctx.fillText(ref.label, tx(ref.x) + 4, pad.t + 10); } });
+    rows.forEach((row, index) => {
+      const y0 = pad.t + slot * index + (slot - barH * row.bars.length) / 2;
+      ctx.fillStyle = "#334650"; ctx.font = "600 11px Inter, system-ui"; ctx.textAlign = "right";
+      ctx.fillText(row.label, pad.l - 8, pad.t + slot * (index + 0.5) + 4);
+      row.bars.forEach((bar, b) => {
+        if (!Number.isFinite(bar.value)) return;
+        const x0 = tx(Math.min(0, bar.value)), x1 = tx(Math.max(0, bar.value)), y = y0 + b * barH;
+        ctx.fillStyle = bar.colour; ctx.fillRect(x0, y + 1, Math.max(1, x1 - x0), barH - 2);
+        ctx.fillStyle = "#334650"; ctx.font = "700 10px Inter, system-ui"; ctx.textAlign = "left";
+        ctx.fillText(bar.text ?? axisLabel(bar.value), x1 + 4, y + barH / 2 + 3);
+      });
+    });
+  }
+  // Rear-wheel rate (N/mm) from the sag load curve, so it includes both spring rates, the linkage and the bump stop.
+  function rateCurve(curve) {
+    const pts = curve?.points || [];
+    return pts.slice(1).map((point, index) => ({ travel: (point.travel + pts[index].travel) / 2, rate: (point.force - pts[index].force) / Math.max(1e-9, point.travel - pts[index].travel) }));
+  }
+  function trailAt(rakeDeg, offset) { const R = outputs.steering?.tyre?.radius || 0, a = rakeDeg * Math.PI / 180; return (R * Math.sin(a) - offset) / Math.cos(a); }
+
+  // ---- Stance --------------------------------------------------------------------------------
   function renderStance(tab) {
-    const m=outputs.massProperties,e=outputs.ergonomics;
-    const f=Core.tyre(state.stance.frontTyreWidth,state.stance.frontTyreAspect,state.stance.frontRim),r=Core.tyre(state.stance.rearTyreWidth,state.stance.rearTyreAspect,state.stance.rearRim);
-    const advancedCount=26;
-    return `<section class="view ${activeTab===tab.id?"active":""}" id="view-${tab.id}">${viewHead(tab)}
-      <div class="grid two"><article class="panel"><h3>Core package inputs</h3><p class="panel-intro">Decision-driving Stance values remain visible. Less-frequent assumptions stay locked in the advanced editor.</p><div class="fields">
-        ${input("stance.vehicleCategory","Vehicle category","",{type:"select",values:["Sport","Naked","Cruiser","Adventure","Touring"]})}
-        ${input("stance.wheelbase","Target wheelbase","mm")}${input("stance.targetRake","Target rake","deg",{step:"0.1"})}${input("stance.targetTrail","Target trail","mm")}
-        ${input("stance.groundClearance","Target ground clearance","mm")}${input("stance.frontTravel","Front travel target","mm")}${input("stance.rearTravel","Rear travel target","mm")}
-      </div><h3 style="margin-top:20px">Tyre geometry</h3><div class="fields">${input("stance.frontTyreWidth","Front width","mm")}${input("stance.frontTyreAspect","Front aspect","%")}${input("stance.frontRim","Front rim","in")}${input("stance.rearTyreWidth","Rear width","mm")}${input("stance.rearTyreAspect","Rear aspect","%")}${input("stance.rearRim","Rear rim","in")}</div>
-      <h3 style="margin-top:20px">Rider, hardpoints and mass drivers</h3><div class="fields">${input("stance.riderHeight","Rider height","mm")}${input("stance.riderInseam","Rider inseam","mm")}${input("stance.riderMass","Rider mass","kg")}${input("stance.seatX","Seat X","mm")}${input("stance.seatZ","Seat Z","mm")}${input("stance.gripX","Grip X","mm")}${input("stance.gripZ","Grip Z","mm")}${input("stance.pegX","Footpeg X","mm")}${input("stance.pegZ","Footpeg Z","mm")}${input("stance.gliderMass","Mechanical glider mass","kg")}${input("stance.gliderCGX","Glider CG X","mm")}${input("stance.gliderCGZ","Glider CG Z","mm")}</div>
-      <details class="advanced-editor" data-stance-advanced ${stanceAdvancedOpen?"open":""}><summary><span>Edit advanced package</span><small>${stanceAdvancedOpen?"Editing":"Locked"} · ${advancedCount} governed values · revision ${state.meta.domainRevisions.stance}</small></summary><div class="advanced-editor-body"><p class="panel-intro">These parameters remain in the solver while locked. Open this editor only when hardpoints, rider anthropometry, pillion or clearance envelopes must change.</p><h3>Frame and lower envelope</h3><div class="fields">${input("stance.rearAxleX","Rear axle X","mm")}${input("stance.rearAxleZ","Rear axle Z","mm")}${input("stance.lowestPointX","Lowest chassis point X","mm")}${input("stance.lowestPointZ","Lowest chassis point Z","mm")}${input("stance.targetWetMass","Project wet-mass target","kg")}</div><h3 style="margin-top:20px">Rider and control detail</h3><div class="fields">${input("stance.riderShoulderWidth","Shoulder width","mm")}${input("stance.torsoLength","Torso length","mm")}${input("stance.upperArmLength","Upper arm","mm")}${input("stance.forearmLength","Forearm","mm")}${input("stance.thighLength","Thigh","mm")}${input("stance.shinLength","Shin","mm")}${input("stance.torsoLean","Torso lean","deg")}${input("stance.handlebarWidth","Handlebar width","mm")}${input("stance.handlebarSweep","Handlebar sweep","deg")}</div><h3 style="margin-top:20px">Pillion, luggage and clearance envelopes</h3><div class="fields">${input("stance.pillionMass","Pillion mass","kg")}${input("stance.luggageMass","Luggage mass","kg")}${input("stance.pegLateral","Peg / knee lateral centre","mm")}${input("stance.tankHalfWidth","Tank half-width","mm")}${input("stance.exhaustX","Exhaust centre X","mm")}${input("stance.exhaustZ","Exhaust centre Z","mm")}${input("stance.exhaustRadius","Exhaust envelope radius","mm")}${input("stance.mirrorHalfSpan","Mirror half-span","mm")}${input("stance.pillionSeatX","Pillion seat X","mm")}${input("stance.pillionSeatZ","Pillion seat Z","mm")}${input("stance.pillionPegX","Pillion peg X","mm")}${input("stance.pillionPegZ","Pillion peg Z","mm")}</div><button type="button" class="button" data-action="lock-stance-advanced" style="margin-top:16px">Apply and lock advanced package</button></div></details></article>
-      <div><article class="panel"><h3>Master-frame package view</h3><p class="panel-intro">Solver-scaled 2D coordinates and entered tyre diameters.</p>${svgVehicle()}</article>
-      <article class="panel"><h3>Stance and rider outputs</h3>${invalidNotice(m,"Mass Properties")}${invalidNotice(e,"Rider package")}<div class="metric-grid">${metric("Front tyre radius",{value:f.radius,unit:"mm",definition:"Nominal geometric radius"},{owner:"stance"})}${metric("Rear tyre radius",{value:r.radius,unit:"mm",definition:"Nominal geometric radius"},{owner:"stance"})}${metric("Front circumference",{value:f.circumference,unit:"mm",definition:"Nominal unloaded circumference"},{owner:"stance"})}${metric("Wet vehicle mass",{value:m.wetMass,unit:"kg",definition:"Glider plus selected electrical component mass; occupants excluded"},{owner:"stance"})}${metric("Active load-case mass",{value:m.totalMass,unit:"kg",definition:"Central Mass Properties aggregate"},{owner:"stance"})}${metric("CG X",{value:m.cgX,unit:"mm",definition:"Mass-weighted master-frame coordinate"},{owner:"stance"})}${metric("CG Z",{value:m.cgZ,unit:"mm",definition:"Mass-weighted master-frame coordinate"},{owner:"stance"})}${metric("Elbow angle",e?.elbowAngle,{owner:"stance"})}${metric("Knee angle",e?.kneeAngle,{owner:"stance"})}${metric("Hip angle",e?.hipAngle,{owner:"stance"})}${metric("Arm reach",e?.armReachUtilisation,{owner:"stance"})}${metric("Ground reach margin",e?.groundReachMargin,{owner:"stance"})}${metric("Knee to tank",e?.kneeTankClearance,{owner:"stance"})}${metric("Heel to exhaust",e?.heelExhaustClearance,{owner:"stance"})}${metric("Mirror to shoulder",e?.mirrorShoulderClearance,{owner:"stance"})}${metric("Pillion knee",e?.pillionKneeAngle,{owner:"stance"})}</div><div class="notice" style="margin-top:14px">Rider results are geometric screens. Joint comfort, soft tissue, control forces, clothing, visibility and physical validation remain not evaluated.</div></article></div></div>
-    </section>`;
+    const m = outputs.massProperties, e = outputs.ergonomics, cases = outputs.massCases || {};
+    const ice = state.powertrain.type === "ICE";
+    const kpis = m?.ok ? kpiStrip("stance", [
+      kpi(`Mass · ${state.meta.loadCase}`, { value: m.totalMass, unit: "kg" }, 1, `wet ${fmt(m.wetMass, 1)} kg (${signed(m.targetDelta, 1)} vs target)`),
+      kpi("Front / rear", { value: `${fmt(m.frontShare, 1)} / ${fmt(100 - m.frontShare, 1)}`, unit: "%" }, 1, `${fmt(m.frontLoadKg, 0)} / ${fmt(m.rearLoadKg, 0)} kg`),
+      kpi("CG height", { value: m.cgHeight, unit: "mm", definition: "CG height above the ground plane" }, 0, `${fmt(m.cgX - Number(state.stance.rearAxleX), 0)} mm ahead of rear axle`),
+      kpi("Ground reach", e?.groundReachMargin, 0, Number(e?.groundReachMargin?.value) < 0 ? "tip-toe at seat" : "feet reach ground"),
+      kpi("Knee / hip angle", { value: `${fmt(e?.kneeAngle?.value, 0)} / ${fmt(e?.hipAngle?.value, 0)}`, unit: "°" }, 0, `elbow ${fmt(e?.elbowAngle?.value, 0)}°`)
+    ]) : invalidNotice(m, "Mass Properties");
+    const caseRows = Object.entries(cases).map(([name, c]) => c?.ok ? [esc(name), withUnit(c.totalMass, "kg"), withUnit(c.frontShare, "%"), `${fmt(c.frontLoadKg, 0)} / ${fmt(c.rearLoadKg, 0)} <small>kg</small>`, withUnit(c.cgHeight, "mm", 0)] : [esc(name), "invalid", "", "", ""]);
+    const ergo = e?.ok === false ? invalidNotice(e, "Rider package") : dataTable(["Rider package", "Value"], [
+      ["Elbow angle", withUnit(e.elbowAngle?.value, "°", 0)], ["Knee angle", withUnit(e.kneeAngle?.value, "°", 0)], ["Hip angle", withUnit(e.hipAngle?.value, "°", 0)],
+      ["Arm reach used", withUnit(e.armReachUtilisation?.value, "%", 0)], ["Ground reach margin", withUnit(e.groundReachMargin?.value, "mm", 0)],
+      ["Knee to tank", withUnit(e.kneeTankClearance?.value, "mm", 0)], ...(ice ? [["Heel to exhaust", withUnit(e.heelExhaustClearance?.value, "mm", 0)]] : []),
+      ["Mirror to shoulder", withUnit(e.mirrorShoulderClearance?.value, "mm", 0)], ["Pillion knee angle", withUnit(e.pillionKneeAngle?.value, "°", 0)]
+    ]);
+    const inputs = `${panel("Package", `<div class="fields">
+        ${input("stance.vehicleCategory", "Vehicle category", "", { type: "select", values: ["Sport", "Naked", "Cruiser", "Adventure", "Touring"], full: true, help: "Sets the typical ranges used in every tab's notes." })}
+        ${input("stance.wheelbase", "Wheelbase", "mm")}${input("stance.targetRake", "Rake", "deg", { step: "0.1" })}${input("stance.targetTrail", "Target trail", "mm")}
+        ${input("stance.groundClearance", "Ground clearance", "mm")}${input("stance.frontTravel", "Front travel", "mm")}${input("stance.rearTravel", "Rear travel", "mm")}
+      </div><h4 class="subhead">Tyres</h4><div class="fields">${input("stance.frontTyreWidth", "Front width", "mm")}${input("stance.frontTyreAspect", "Front aspect", "%")}${input("stance.frontRim", "Front rim", "in")}${input("stance.rearTyreWidth", "Rear width", "mm")}${input("stance.rearTyreAspect", "Rear aspect", "%")}${input("stance.rearRim", "Rear rim", "in")}</div>`)}
+      ${panel("Mass and rider", `<div class="fields">${input("stance.gliderMass", "Glider mass", "kg")}${input("stance.gliderCGX", "Glider CG X", "mm")}${input("stance.gliderCGZ", "Glider CG Z", "mm")}${input("stance.riderMass", "Rider mass", "kg")}${input("stance.pillionMass", "Pillion mass", "kg")}${input("stance.luggageMass", "Luggage mass", "kg")}${input("stance.riderHeight", "Rider height", "mm")}${input("stance.riderInseam", "Rider inseam", "mm")}</div>
+        <h4 class="subhead">Rider hardpoints</h4><div class="fields">${input("stance.seatX", "Seat X", "mm")}${input("stance.seatZ", "Seat Z", "mm")}${input("stance.gripX", "Grip X", "mm")}${input("stance.gripZ", "Grip Z", "mm")}${input("stance.pegX", "Footpeg X", "mm")}${input("stance.pegZ", "Footpeg Z", "mm")}</div>`)}
+      <details class="advanced-editor" data-stance-advanced ${stanceAdvancedOpen ? "open" : ""}><summary><span>Advanced package</span><small>${stanceAdvancedOpen ? "Editing" : "Locked"} · revision ${state.meta.domainRevisions.stance}</small></summary><div class="advanced-editor-body">
+        <h4 class="subhead">Frame and lean envelope</h4><div class="fields">${input("stance.rearAxleX", "Rear axle X", "mm")}${input("stance.rearAxleZ", "Rear axle Z", "mm")}${input("stance.lowestPointX", "Lowest point X", "mm")}${input("stance.lowestPointZ", "Lowest point Z", "mm")}${input("stance.bellyHalfWidth", "Lowest point half-width", "mm", { help: "Lateral half-width at the lowest point; sets belly lean clearance." })}${input("stance.pegTipLateral", "Footpeg tip lateral", "mm", { help: "Peg tip distance from centreline; sets peg lean clearance." })}${input("stance.targetWetMass", "Wet-mass target", "kg")}</div>
+        <h4 class="subhead">Rider detail</h4><div class="fields">${input("stance.riderShoulderWidth", "Shoulder width", "mm")}${input("stance.torsoLength", "Torso length", "mm")}${input("stance.upperArmLength", "Upper arm", "mm")}${input("stance.forearmLength", "Forearm", "mm")}${input("stance.thighLength", "Thigh", "mm")}${input("stance.shinLength", "Shin", "mm")}${input("stance.torsoLean", "Torso lean", "deg")}${input("stance.handlebarWidth", "Bar width", "mm")}${input("stance.handlebarSweep", "Bar sweep", "deg")}</div>
+        <h4 class="subhead">Pillion and envelopes</h4><div class="fields">${input("stance.pegLateral", "Foot / knee lateral", "mm")}${input("stance.tankHalfWidth", "Tank half-width", "mm")}${input("stance.mirrorHalfSpan", "Mirror half-span", "mm")}${input("stance.pillionSeatX", "Pillion seat X", "mm")}${input("stance.pillionSeatZ", "Pillion seat Z", "mm")}${input("stance.pillionPegX", "Pillion peg X", "mm")}${input("stance.pillionPegZ", "Pillion peg Z", "mm")}${ice ? `${input("stance.exhaustX", "Exhaust X", "mm")}${input("stance.exhaustZ", "Exhaust Z", "mm")}${input("stance.exhaustRadius", "Exhaust radius", "mm")}` : ""}</div>
+        <button type="button" class="button" data-action="lock-stance-advanced" style="margin-top:14px">Apply and lock</button></div></details>`;
+    const results = `${panel("Master-frame package", svgVehicle(), "Solver-scaled hardpoints and tyre diameters.")}
+      ${panel("Load cases", `${dataTable(["Case", "Mass", "Front share", "Front / rear", "CG height"], caseRows)}${canvasChart("axleLoadChart", "Front and rear axle load for each load case", 170)}${legend([["Front axle", "#266b92"], ["Rear axle", "#a66516"]])}`, "Every load-dependent tab reads these. The active case is chosen in the bar at the top.")}
+      ${panel("Where the mass is", canvasChart("massBreakdownChart", `Mass by group for the ${state.meta.loadCase} case`, 190), `Grouped contributions for ${esc(state.meta.loadCase)}.`)}
+      ${panel("Rider package", `${ergo}<p class="diagram-note">Geometric screens only: comfort, control forces and clothing are not evaluated.</p>`)}`;
+    const notes = notesRail("stance", {
+      why: "Mass, its split between the axles and CG height drive every downstream result: sag, trail under load, braking limits, wheelie limit and anti-squat. Front share is the single biggest lever on steering feel.",
+      how: ["CG is the mass-weighted mean of the glider, occupants and every E/E component.", "Axle loads come from moments about the rear contact patch over the wheelbase.", "CG height is measured from the ground plane under the rear tyre.", "Tyre sizes are nominal (width × aspect + rim); loaded radius is not modelled."]
+    });
+    return page(tab, { inputs, results, notes, kpis });
+  }
+  function drawStanceCharts() {
+    const cases = outputs.massCases || {};
+    barChart(document.querySelector("#axleLoadChart"), {
+      xLabel: "Axle load (kg)", labelWidth: 120,
+      rows: Object.entries(cases).filter(([, c]) => c?.ok).map(([name, c]) => ({ label: name, bars: [{ value: c.frontLoadKg, colour: "#266b92", text: `${fmt(c.frontLoadKg, 0)} kg · ${fmt(c.frontShare, 1)}%` }, { value: c.rearLoadKg, colour: "#a66516", text: `${fmt(c.rearLoadKg, 0)} kg` }] }))
+    });
+    const m = outputs.massProperties;
+    if (!m?.ok) return;
+    const groups = { "Glider": 0, "Battery pack": 0, "Motor & inverter": 0, "Other E/E": 0, "Rider": 0, "Pillion & luggage": 0 };
+    m.instances.forEach(item => {
+      const key = item.id === "glider" ? "Glider" : item.id === "rider" ? "Rider" : ["pillion", "luggage"].includes(item.id) ? "Pillion & luggage" : item.category === "HV storage" ? "Battery pack" : ["Traction machine", "HV converter"].includes(item.category) ? "Motor & inverter" : "Other E/E";
+      groups[key] += Number(item.mass) || 0;
+    });
+    barChart(document.querySelector("#massBreakdownChart"), {
+      xLabel: "Mass (kg)", labelWidth: 130,
+      rows: Object.entries(groups).filter(([, value]) => value > 0).map(([label, value], index) => ({ label, bars: [{ value, colour: SERIES_COLOURS[index % SERIES_COLOURS.length], text: `${fmt(value, 1)} kg · ${fmt(value / m.totalMass * 100, 0)}%` }] }))
+    });
   }
 
+  // ---- Steering ------------------------------------------------------------------------------
   function renderSteering(tab) {
-    const o = outputs.steering;
-    return `<section class="view ${activeTab === tab.id ? "active" : ""}" id="view-${tab.id}">${viewHead(tab)}<div class="grid two"><article class="panel"><h3>Steering-owned inputs</h3><div class="fields">${input("steering.upperOffset","Upper offset","mm")}${input("steering.underBracketOffset","Under-bracket offset","mm")}${input("steering.bracketSpan","Bracket span","mm")}${input("steering.steeringAngle","Steering study angle","deg")}${input("steering.cornerSpeed","Corner study speed","km/h")}${input("steering.cornerRadius","Corner study radius","m")}${input("steering.brakingDecel","Braking deceleration","g",{step:"0.05"})}${input("steering.forkSpringRate","Per-leg fork spring rate","N/mm")}${input("steering.forkPreload","Installed fork preload","mm")}</div><h3 style="margin-top:20px">Linked inputs</h3><div class="fields">${linkedField("stance.targetRake","Rake","deg")}${linkedField("stance.targetTrail","Target trail","mm")}${linkedField("stance.wheelbase","Wheelbase","mm")}${linkedField("stance.frontTravel","Front travel","mm")}</div><div class="notice" style="margin-top:14px">Linked values are read-only here. Change them in Stance; load-case mass and CG come only from Mass Properties.</div></article><article class="panel"><h3>Unladen front-end outputs</h3>${invalidNotice(o,"Steering geometry")}<div class="metric-grid">${metric("Head tube to Fork C to C distance",o.headTubeToForkCC,{owner:"steering",digits:2})}${metric("Ground trail",o.groundTrail,{owner:"steering"})}${metric("Normal trail",o.normalTrail,{owner:"steering"})}${metric("Wheel flop",o.flop,{owner:"steering"})}${metric("Offset for target trail",o.requiredOffset,{owner:"steering"})}${metric("Turn radius",o.turnRadius,{owner:"steering"})}${metric("Offset delta",o.offsetDelta,{owner:"steering"})}${metric("Fork-axis delta",o.forkAxisDelta,{owner:"steering"})}${metric("Fork rake",o.forkRake,{owner:"steering"})}${metric("Normal-trail ratio",o.normalTrailRatio,{owner:"steering",digits:3})}${metric("Axle-load trail ratio",o.axleLoadCorrectedRatio,{owner:"steering",digits:3})}${metric("Braking load transfer",o.brakingTransfer,{owner:"steering"})}${metric("Spring-only fork dive",o.springDive,{owner:"steering"})}${metric("Vertical fork rate",o.verticalForkRate,{owner:"steering"})}${metric("Ideal lean",o.idealLean,{owner:"steering"})}${metric("Wheelie limit",o.wheelieLimit,{owner:"steering"})}${metric("Stoppie limit",o.stoppieLimit,{owner:"steering"})}</div><div class="notice warning" style="margin-top:14px">${esc(DATA.sourceNotes.trail)}</div></article></div></section>`;
+    const o = outputs.steering, g = outputs.sag?.brakingGeometry, ok = o?.ok === true;
+    const solo = outputs.sag?.loadCases?.["Solo rider"];
+    const kpis = ok ? kpiStrip("steering", [
+      kpi("Ground trail", o.groundTrail, 1, `normal trail ${fmt(o.normalTrail.value, 1)} mm`),
+      kpi("Trail, solo rider", { value: solo?.ok ? solo.trail : null, unit: "mm" }, 1, solo?.ok ? `rake ${fmt(solo.rake, 2)}°` : "sag unavailable"),
+      kpi(`Trail at ${fmt(state.braking.targetDecel, 2)} g`, { value: g?.trail ?? null, unit: "mm" }, 1, g ? `dive ${fmt(g.dive, 0)} mm · rake ${fmt(g.rake, 1)}°` : "sag unavailable"),
+      kpi("Offset for target", o.requiredOffset, 1, `entered ${fmt(state.steering.upperOffset, 1)} mm`),
+      kpi("Lean clearance", o.leanClearance, 1, o.leanLimitedBy ? `${o.leanLimitedBy === "Footpeg tip" ? "peg" : "belly"} touches first` : ""),
+      kpi("Lean margin", o.leanMargin, 1, `needs ${fmt(o.requiredLean.value, 1)}° in corner study`)
+    ]) : invalidNotice(o, "Steering geometry");
+    const inputs = `${panel("Triple clamp", `<div class="fields">${input("steering.upperOffset", "Upper offset", "mm")}${input("steering.underBracketOffset", "Lower offset", "mm")}${input("steering.bracketSpan", "Bracket span", "mm")}${input("steering.steeringAngle", "Steering angle study", "deg")}</div>`)}
+      ${panel("Corner study", `<div class="fields">${input("steering.cornerSpeed", "Corner speed", "km/h")}${input("steering.cornerRadius", "Corner radius", "m")}</div>`)}
+      ${panel("Linked inputs", linkedList([["Rake", `${fmt(state.stance.targetRake, 1)}°`, sourceTag("stance")], ["Target trail", `${fmt(state.stance.targetTrail, 0)} mm`, "Stance"], ["Wheelbase", `${fmt(state.stance.wheelbase, 0)} mm`, "Stance"], ["Front tyre radius", ok ? `${fmt(o.tyre.radius, 1)} mm` : "—", "Stance"], ["Braking deceleration", `${fmt(state.braking.targetDecel, 2)} g`, "Braking"], ["Fork springs", `${fmt(state.sag.frontK1, 1)} N/mm × ${state.sag.frontSpringCount}`, "Sag & outputs"]]))}`;
+    const results = ok ? `${panel("Steering construction", steeringDiagram(), "Tyre, rake, fork axis and trail in the master frame.")}
+      ${panel("Trail through fork travel", `${canvasChart("trailTravelChart", "Ground trail against front fork travel, with load-case and braking points", 290)}${legend([["Rear at rider sag", "#1f6b50"], ["Rear fully extended", "#1f6b50", true], ["Typical trail", "rgba(31,107,80,.25)"], ["Load cases", "#6e56a0"], ["Braking", "#d75f36"]])}`, "Trail shrinks as the fork compresses, and again as the rear extends under braking — the braking point sits on the dashed line when the rear tops out.")}
+      ${panel("Trail vs clamp offset", `${canvasChart("offsetChart", "Ground trail against triple-clamp offset for rake around the current value", 270)}${legend([...[-2, -1, 0, 1, 2].map((d, i) => [`${fmt(Number(state.stance.targetRake) + d, 1)}°`, ["#b9c7c0", "#7aa595", "#1f6b50", "#6f93ad", "#a9bccb"][i]]), ["Typical trail", "rgba(31,107,80,.25)"]])}`, "Design chart for picking offset: each line is one rake. The dot is the current design.")}
+      <div class="grid equal">${panel("Clamp construction", dataTable(["", "Value"], [["Offset delta (lower − upper)", withUnit(o.offsetDelta.value, "mm")], ["Fork-axis angle change", withUnit(o.forkAxisDelta.value, "°", 2)], ["Fork rake", withUnit(o.forkRake.value, "°", 2)], ["Head tube to fork C-C at grips", withUnit(o.headTubeToForkCC.value, "mm", 2)], [`Head drop at ${fmt(state.steering.steeringAngle, 0)}° steer`, withUnit(o.flop.value, "mm")], [`Turn radius at ${fmt(state.steering.steeringAngle, 0)}° steer`, withUnit(o.turnRadius.value, "m", 2)]]))}
+      ${panel("Lean", dataTable(["", "Value"], [["Point-mass lean at corner study", withUnit(o.idealLean.value, "°")], ["With tyre-crown correction", withUnit(o.requiredLean.value, "°")], ["Footpeg tip touches at", withUnit(o.pegLean, "°")], ["Lowest point touches at", withUnit(o.bellyLean, "°")], ["Margin", withUnit(o.leanMargin.value, "°")]]) + `<p class="diagram-note">Unladen, crown radius ${fmt(o.crownRadius, 0)} mm. Sag lowers both contact points.</p>`)}</div>` : "";
+    const notes = notesRail("steering", {
+      why: "Trail sets self-centring and steering effort; rake and offset set how trail changes as the fork compresses. The braking number matters most: trail collapses exactly when the rider is busiest.",
+      how: ["Ground trail = (R·sin rake − offset) / cos rake, R = front tyre radius.", "Fork travel pitches the chassis by atan((rear − front travel) / wheelbase); rake changes by that angle.", `Braking: load transfer m·a·h/wb onto the Sag spring models, solo rider, spring only (no damping).`, "Lean clearance: the bike rolls on a round crown of radius r; a point (y, h) touches when (h − r)cosθ − y·sinθ + r = 0.", "Required lean adds the Cossalter crown correction asin(r·sinθ/(h_cg − r))."]
+    });
+    return page(tab, { inputs, results, notes, kpis });
+  }
+  function drawSteeringCharts() {
+    const o = outputs.steering, sag = outputs.sag;
+    if (!o?.ok) return;
+    const wb = Number(state.stance.wheelbase), rake0 = Number(state.stance.targetRake), offset = Number(state.steering.upperOffset);
+    const rearSag = sag?.loadCases?.["Solo rider"]?.ok ? sag.loadCases["Solo rider"].rearWheelDisplacement : 0;
+    const maxF = Math.min(Number(state.stance.frontTravel), Number(state.suspension.frontWheelToMetal));
+    const line = rear => Array.from({ length: 41 }, (_, i) => { const f = maxF * i / 40; return [f, trailAt(rake0 + Math.atan2(rear - f, wb) * 180 / Math.PI, offset)]; });
+    const points = Object.entries(sag?.loadCases || {}).filter(([, c]) => c?.ok).map(([name, c]) => ({ x: c.frontWheelDisplacement, y: c.trail, colour: "#6e56a0", r: 4, label: name === "Solo rider" ? "solo" : name === "Kerb" ? "kerb" : "duals", align: name === "Kerb" ? "right" : "left" }));
+    if (sag?.brakingGeometry) points.push({ x: sag.brakingGeometry.frontTravel, y: sag.brakingGeometry.trail, colour: "#d75f36", label: `${fmt(sag.brakingGeometry.decel, 2)} g braking` });
+    const trailBand = bandFor("trail");
+    const sagLine = line(rearSag), extendedLine = line(0);
+    xyChart(document.querySelector("#trailTravelChart"), {
+      xLabel: "Front fork travel (mm)", yLabel: "Ground trail (mm)", xMax: maxF,
+      yMin: Math.floor(Math.min(...sagLine.map(p => p[1]), ...extendedLine.map(p => p[1]), trailBand ? trailBand[0] : 1e9) / 10) * 10 - 10,
+      bands: trailBand ? [{ y0: trailBand[0], y1: trailBand[1] }] : [],
+      series: [{ data: sagLine, colour: "#1f6b50" }, { data: extendedLine, colour: "#1f6b50", dash: [7, 5], width: 1.8 }],
+      points
+    });
+    const shades = ["#b9c7c0", "#7aa595", "#1f6b50", "#6f93ad", "#a9bccb"];
+    const series = [-2, -1, 0, 1, 2].map((d, i) => ({ data: Array.from({ length: 31 }, (_, k) => [k * 2, trailAt(rake0 + d, k * 2)]), colour: shades[i], width: d === 0 ? 2.6 : 1.6 }));
+    xyChart(document.querySelector("#offsetChart"), {
+      xLabel: "Clamp offset (mm)", yLabel: "Ground trail (mm)", xMax: 60,
+      yMin: Math.floor(Math.min(...series.flatMap(s => s.data.map(p => p[1]))) / 10) * 10,
+      bands: trailBand ? [{ y0: trailBand[0], y1: trailBand[1] }] : [],
+      series, points: [{ x: offset, y: o.groundTrail.value, colour: "#d75f36", label: `${fmt(offset, 0)} mm → ${fmt(o.groundTrail.value, 0)} mm` }],
+      hLines: [{ y: Number(state.stance.targetTrail), label: "target", colour: "#6e56a0" }]
+    });
+  }
+
+  // ---- Suspension geometry --------------------------------------------------------------------
+  function renderSuspension(tab) {
+    const o = outputs.suspension, ok = o?.ok === true, linkage = state.suspension.rearArchitecture === "linkage";
+    const sagTravel = outputs.sag?.loadedGeometryInput?.rearWheelDisplacement;
+    const pts = ok ? o.points : [];
+    const at = travel => { if (!pts.length) return null; const t = Math.max(pts[0].wheelTravel, Math.min(pts.at(-1).wheelTravel, travel)); const i = Math.max(1, pts.findIndex(p => p.wheelTravel >= t)); const a = pts[i - 1], b = pts[i] || a; const f = b.wheelTravel > a.wheelTravel ? (t - a.wheelTravel) / (b.wheelTravel - a.wheelTravel) : 0; return { travel: t, shock: a.shockTravel + (b.shockTravel - a.shockTravel) * f, mr: a.motionRatio + (b.motionRatio - a.motionRatio) * f }; };
+    const rates = rateCurve(outputs.sag?.loadCurves?.rear);
+    const rateAt = travel => { if (!rates.length) return null; const near = rates.reduce((best, r) => Math.abs(r.travel - travel) < Math.abs(best.travel - travel) ? r : best, rates[0]); return near.rate; };
+    const stations = ok ? [["Extension", 0], ...(Number.isFinite(sagTravel) ? [[`Rider sag (${state.meta.loadCase})`, sagTravel]] : []), ["Mid travel", o.usableWheelTravel.value / 2], ["Full travel", o.usableWheelTravel.value]].map(([label, t]) => { const s = at(t); return [esc(label), withUnit(s.travel, "mm", 0), withUnit(s.shock, "mm"), fmt(1 / Math.max(1e-9, s.mr), 2), withUnit(rateAt(s.travel), "N/mm")]; }) : [];
+    const kpis = ok ? kpiStrip("suspension", [
+      kpi("Rear wheel travel", o.usableWheelTravel, 0, `shock stroke ${fmt(o.shockTravel.value, 1)} mm`),
+      kpi("Leverage ratio", o.leverageRatio, 2, "wheel / shock, average"),
+      kpi("Progression", o.progression, 1, linkage ? "linkage" : "direct mount"),
+      kpi("Static shock length", o.initialShockLength, 1, "eye to eye"),
+      kpi("Front stroke margin", o.frontStrokeMargin, 0, "wheel-to-metal − travel"),
+      kpi("Fork air at full stroke", o.forkEndPressure, 2, "from 1 bar abs")
+    ]) : invalidNotice(o, "Suspension geometry");
+    const hardpoints = linkage ? `<h4 class="subhead">Linkage</h4><div class="fields">${input("suspension.dogboneSwingX", "Dogbone swingarm X", "mm")}${input("suspension.dogboneSwingZ", "Dogbone swingarm Z", "mm")}${input("suspension.rockerPivotX", "Rocker pivot X", "mm")}${input("suspension.rockerPivotZ", "Rocker pivot Z", "mm")}${input("suspension.rockerDogboneX", "Rocker dogbone X", "mm")}${input("suspension.rockerDogboneZ", "Rocker dogbone Z", "mm")}${input("suspension.rockerShockX", "Rocker shock X", "mm")}${input("suspension.rockerShockZ", "Rocker shock Z", "mm")}</div>` : `<h4 class="subhead">Direct mount</h4><div class="fields">${input("suspension.shockSwingX", "Shock swingarm X", "mm")}${input("suspension.shockSwingZ", "Shock swingarm Z", "mm")}</div>`;
+    const inputs = `${panel("Rear", `<div class="fields">${input("suspension.rearArchitecture", "Architecture", "", { type: "select", full: true, values: [{ value: "direct", label: "Direct mount" }, { value: "linkage", label: "Linkage" }] })}${input("suspension.shockFrameX", "Shock frame X", "mm")}${input("suspension.shockFrameZ", "Shock frame Z", "mm")}${input("suspension.rearWheelToMetal", "Rear wheel-to-metal", "mm")}${input("suspension.bumpStopStart", "Bump stop starts", "mm wheel")}${input("suspension.bumpStopRate", "Bump-stop rate", "N/mm")}${input("suspension.sweepSteps", "Sweep stations", "count")}</div>${hardpoints}`)}
+      ${panel("Front fork", `<div class="fields">${input("suspension.forkLength", "Fork length", "mm")}${input("suspension.forkStanchion", "Stanchion OD", "mm")}${input("suspension.forkAirVolume", "Air volume / leg", "ml")}${input("suspension.forkAirPistonDiameter", "Air piston Ø", "mm")}${input("suspension.frontWheelToMetal", "Front wheel-to-metal", "mm")}</div>`)}
+      ${panel("Linked inputs", linkedList([["Rear axle", `${fmt(state.stance.rearAxleX, 0)}, ${fmt(state.stance.rearAxleZ, 0)} mm`, sourceTag("stance")], ["Rear travel target", `${fmt(state.stance.rearTravel, 0)} mm`, "Stance"], ["Rear spring", `${fmt(state.sag.rearK1, 0)} / ${fmt(state.sag.rearK2, 0)} N/mm`, "Sag & outputs"]]))}`;
+    const results = ok ? `${panel("Suspension construction", suspensionDiagram(), "Fork and rear kinematics on the active hardpoints.")}
+      ${panel("Leverage ratio and wheel rate through travel", `${canvasChart("suspensionChart", "Rear leverage ratio and wheel rate against wheel travel", 290)}${legend([["Leverage ratio (wheel / shock)", "#266b92"], ["Wheel rate (right axis)", "#a66516"], ["Rider sag", "#6e56a0", true]])}`, "Falling leverage ratio = progressive. Wheel rate comes from the Sag spring model, so it includes the second spring rate and the bump stop.")}
+      ${panel("Rear stations", dataTable(["Station", "Wheel travel", "Shock stroke", "Leverage", "Wheel rate"], stations))}` : "";
+    const notes = notesRail("suspension", {
+      why: "The linkage turns a spring into a wheel rate. Progression decides whether the rear resists bottoming without being harsh at sag; leverage ratio decides how hard the shock works.",
+      how: [esc(DATA.sourceNotes.motionRatio), "Leverage ratio = 1 / motion ratio (wheel travel per unit shock stroke).", "Wheel rate is the slope of the Sag tab's rear load–deflection curve.", "Fork air: isothermal compression of the entered air volume by the air-piston swept volume."]
+    });
+    return page(tab, { inputs, results, notes, kpis });
+  }
+  function drawSuspensionChart() {
+    const o = outputs.suspension; if (!o?.ok) return;
+    const rates = rateCurve(outputs.sag?.loadCurves?.rear), sagTravel = outputs.sag?.loadedGeometryInput?.rearWheelDisplacement;
+    xyChart(document.querySelector("#suspensionChart"), {
+      xLabel: "Rear wheel travel (mm)", yLabel: "Leverage ratio", y2Label: "Wheel rate (N/mm)", xMax: o.usableWheelTravel.value,
+      yMin: Math.floor(Math.min(...o.points.map(p => 1 / p.motionRatio)) * 2) / 2 - 0.5,
+      series: [{ data: o.points.map(p => [p.wheelTravel, 1 / p.motionRatio]), colour: "#266b92" }, { data: rates.map(r => [r.travel, r.rate]), colour: "#a66516", axis: "y2" }],
+      vLines: Number.isFinite(sagTravel) ? [{ x: sagTravel, label: "sag", colour: "#6e56a0" }] : []
+    });
+  }
+
+  // ---- Anti-squat ---------------------------------------------------------------------------------
+  function renderAntiSquat(tab) {
+    const o = outputs.antiSquat, ok = o?.ok === true;
+    const kpis = ok ? kpiStrip("antiSquat", [
+      kpi("At rider sag", o.atSag, 0, `${fmt(o.sagTravel.value, 0)} mm wheel travel`),
+      kpi("At extension", o.start, 0, "topped out"),
+      kpi("At full travel", o.end, 0, "bottomed"),
+      kpi("Range through travel", o.range, 0, `${fmt(o.averageGradient.value, 2)} %/mm average`),
+      kpi("Crosses 100% at", o.neutralCrossover, 0, o.neutralCrossover.value === null ? "never crosses" : "wheel travel")
+    ]) : invalidNotice(o, "Anti-squat");
+    const p = state.powertrain;
+    const inputs = `${panel("Study", `<div class="fields">${input("antiSquat.driveType", "Final-drive type", "", { type: "select", values: ["chain", "belt", "shaft"] })}${input("antiSquat.analysisSteps", "Stations", "count")}</div>${state.antiSquat.driveType === "shaft" ? `<div class="notice warning compact">Shaft is a swingarm-pivot baseline only; bevel-gear reaction is not modelled.</div>` : ""}`)}
+      ${panel("Linked inputs", linkedList([["Sprockets", `${p.frontTeeth} / ${p.rearTeeth} T · ${fmt(p.chainPitch, 3)} mm`, sourceTag("powertrain")], ["Drive sprocket", `${fmt(p.driveSprocketX, 0)}, ${fmt(p.driveSprocketZ, 0)} mm`, "Transmission"], ["Wheelbase", `${fmt(state.stance.wheelbase, 0)} mm`, "Stance"], ["CG height", `${fmt(outputs.massProperties?.cgHeight, 0)} mm`, state.meta.loadCase], ["Sag point", ok ? `${fmt(o.sagTravel.value, 1)} mm wheel` : "—", "Sag & outputs"]]))}`;
+    const results = ok ? `${panel("Anti-squat construction", antiSquatDiagram(), "Chain line, swingarm, force centre, loaded CG and the 100% line.")}
+      ${panel("Anti-squat through rear travel", `${canvasChart("antiSquatChart", "Anti-squat percentage against rear wheel travel", 290)}${legend([["Anti-squat", "#1f6b50"], ["Typical at sag", "rgba(31,107,80,.25)"], ["Rider sag", "#6e56a0", true]])}`, "Above 100% the rear extends under drive; below 100% it squats. The value at sag is what the rider feels.")}` : "";
+    const notes = notesRail("anti_squat", {
+      why: "Anti-squat sets how the chassis pitches when drive torque is applied: too low and the rear squats and the steering goes light; too high and the rear jacks up, unloading the tyre on exit.",
+      how: [esc(DATA.sourceNotes.antiSquat), ok ? `Extension force centre at ${fmt(o.extensionForceCentreX.value, 0)}, ${fmt(o.extensionForceCentreZ.value, 0)} mm.` : "", "Read at the active load-case rear sag solved on the Sag tab."].filter(Boolean)
+    });
+    return page(tab, { inputs, results, notes, kpis });
+  }
+  function drawAntiSquatChart() {
+    const o = outputs.antiSquat; if (!o?.ok) return;
+    const b = bandFor("antiSquatAtSag");
+    xyChart(document.querySelector("#antiSquatChart"), {
+      xLabel: "Rear wheel travel (mm)", yLabel: "Anti-squat (%)", xMax: o.samples.at(-1).wheelTravel,
+      yMin: Math.min(0, Math.floor(Math.min(...o.samples.map(s => s.anti)) / 20) * 20),
+      bands: b ? [{ y0: b[0], y1: b[1] }] : [],
+      series: [{ data: o.samples.map(s => [s.wheelTravel, s.anti]), colour: "#1f6b50" }],
+      hLines: [{ y: 100, label: "100% neutral", colour: "#8f9b97" }],
+      vLines: Number.isFinite(o.sagTravel.value) ? [{ x: o.sagTravel.value, label: "sag", colour: "#6e56a0" }] : [],
+      points: Number.isFinite(o.atSag.value) ? [{ x: o.sagTravel.value, y: o.atSag.value, colour: "#6e56a0", label: `${fmt(o.atSag.value, 0)}%` }] : []
+    });
+  }
+
+  // ---- Sensitivity ----------------------------------------------------------------------------------
+  const sensitivityLabels = { trail: "Ground trail", loadedRake: "Loaded rake", loadedTrail: "Loaded trail", groundClearance: "Loaded clearance", antiSquatAtSag: "Anti-squat at sag", totalMass: "Total mass", range: "Estimated range", lvHeadroom: "DC-DC headroom" };
+  function renderSensitivity(tab) {
+    const o = outputs.sensitivity, ok = o?.ok === true;
+    const options = [["steering.upperOffset", "Upper clamp offset · Steering"], ["stance.rearAxleZ", "Rear axle height · Stance"], ["suspension.shockFrameX", "Shock frame mount X · Suspension"], ["suspension.rockerPivotZ", "Rocker pivot Z · Suspension"], ["sag.rearPreload", "Rear spring preload · Sag"], ["powertrain.driveSprocketZ", "Drive sprocket Z · Transmission"], ["electrical.series", "Cells in series · Energy & E/E"]].map(([value, label]) => ({ value, label }));
+    const rows = ok ? o.rows.map(row => [esc(sensitivityLabels[row.output] || row.output), fmt(row.base, 2), row.derivative === null ? "—" : fmt(row.derivative, 3), row.rssAtTolerance === null ? "—" : `± ${fmt(row.rssAtTolerance, 3)}`, row.rssAtTolerance === null || !row.base ? "—" : `${fmt(Math.abs(row.rssAtTolerance / row.base) * 100, 2)}%`, `<span class="badge ${row.valid ? "review" : "conflict_invalid"}">${esc(row.response)}</span>`]) : [];
+    const top = ok ? o.rows.filter(r => r.rssAtTolerance !== null && r.base).sort((a, b) => Math.abs(b.rssAtTolerance / b.base) - Math.abs(a.rssAtTolerance / a.base))[0] : null;
+    const kpis = ok && top ? kpiStrip("sensitivity", [kpi("Most affected output", { value: sensitivityLabels[top.output] || top.output }, 0, `± ${fmt(Math.abs(top.rssAtTolerance / top.base) * 100, 2)}% at ± ${fmt(state.sensitivity.tolerance, 2)}`), kpi("Parameter", { value: (options.find(item => item.value === state.sensitivity.parameter)?.label || state.sensitivity.parameter).split(" · ")[0] }, 0, `± ${fmt(state.sensitivity.tolerance, 2)} tolerance`)]) : invalidNotice(o, "Sensitivity study");
+    const inputs = `${panel("Study", `<div class="fields">${input("sensitivity.parameter", "Parameter", "", { type: "select", values: options, full: true })}${input("sensitivity.step", "Difference step", "units")}${input("sensitivity.tolerance", "Tolerance ±", "units")}</div><p class="diagram-note">Baseline revision ${state.meta.revision} is read-only. Results never overwrite an owning tab.</p>`)}`;
+    const results = ok ? `${panel("Tolerance effect by output", canvasChart("tornadoChart", "Each output's change at the entered tolerance, as a percentage of its baseline", 260), "Which outputs move most, relative to their own size, when this parameter sits at its tolerance limit.")}
+      ${panel("Local response", dataTable(["Output", "Baseline", "Per unit", "At tolerance", "% of baseline", "Response"], rows))}` : "";
+    const notes = notesRail("sensitivity", {
+      why: "Tells you which drawing tolerances matter. A hardpoint whose tolerance moves anti-squat or trail by a few percent needs a tighter tolerance or an adjuster.",
+      how: ["Central difference: (f(x + h) − f(x − h)) / 2h around the baseline.", "Tolerance effect = derivative × tolerance (single parameter, not a multi-variable RSS).", "Response flags asymmetry between forward and backward differences as non-linear."]
+    });
+    return page(tab, { inputs, results, notes, kpis, study: true });
+  }
+  function drawTornado() {
+    const o = outputs.sensitivity; if (!o?.ok) return;
+    const rows = o.rows.filter(r => r.rssAtTolerance !== null && r.base).map(r => ({ label: sensitivityLabels[r.output] || r.output, pct: Math.abs(r.rssAtTolerance / r.base) * 100 })).sort((a, b) => b.pct - a.pct);
+    barChart(document.querySelector("#tornadoChart"), { xLabel: "Change at tolerance (% of baseline)", labelWidth: 140, rows: rows.map(r => ({ label: r.label, bars: [{ value: r.pct, colour: "#266b92", text: `${fmt(r.pct, 2)}%` }] })) });
+  }
+
+  // ---- Sag & outputs ------------------------------------------------------------------------------------
+  function renderSag(tab) {
+    const o = outputs.sag, ok = o?.ok === true || (o && o.loadCases);
+    const avail = o?.rearShockTravelAvailable?.value, maxFront = Math.min(Number(state.stance.frontTravel), Number(state.suspension.frontWheelToMetal));
+    const pill = o?.loadCases?.["Rider + pillion"];
+    const kpis = o?.loadCases ? kpiStrip("sag", [
+      kpi("Rider sag, front", o.expectedFrontForkRiderPercent, 0, `${fmt(o.expectedFrontForkRiderSag.value, 1)} mm fork`),
+      kpi("Rider sag, rear", o.expectedRearShockRiderPercent, 0, `${fmt(o.expectedRearShockRiderSag.value, 1)} mm shock`),
+      kpi("Rear sag, duals", { value: pill && avail ? pill.rearShockSag / avail * 100 : null, unit: "%" }, 0, pill?.ok ? `${fmt(pill.rearShockSag, 1)} mm shock` : "bottomed"),
+      kpi("Ride frequency", { value: `${fmt(o.frontFrequency.value, 2)} / ${fmt(o.rearFrequency.value, 2)}`, unit: "Hz" }, 2, `front / rear · ratio ${fmt(o.frequencyRatio.value, 2)}`),
+      kpi("Loaded trail", o.loadedTrail, 1, `${state.meta.loadCase} · rake ${fmt(o.loadedRake.value, 2)}°`),
+      kpi("Loaded clearance", o.loadedClearance, 0, state.meta.loadCase)
+    ]) : invalidNotice(o, "Sag and loaded geometry");
+    const caseRows = Object.entries(o?.loadCases || {}).map(([name, row]) => [`${esc(name)}${row.ok ? "" : ' <span class="chip chip-high">bottomed</span>'}`, `${fmt(row.frontForkSag, 1)} <small>mm · ${fmt(row.frontForkSag / maxFront * 100, 0)}%</small>`, `${fmt(row.rearShockSag, 1)} <small>mm · ${fmt(avail ? row.rearShockSag / avail * 100 : null, 0)}%</small>`, withUnit(row.rake, "°", 2), withUnit(row.trail, "mm"), withUnit(row.wheelbase, "mm", 0), withUnit(row.clearance, "mm", 0)]);
+    const curves = o?.loadCurves;
+    const unreachable = [];
+    if (curves && !curves.rear.markers.some(m => m.kind === "transition")) unreachable.push(`rear second rate (transition ${fmt(state.sag.rearTransition, 0)} mm shock) never engages`);
+    if (curves && !curves.front.markers.some(m => m.kind === "transition")) unreachable.push(`front second rate (transition ${fmt(state.sag.frontTransition, 0)} mm) never engages`);
+    const inputs = `${panel("Rear spring", `<div class="fields">${input("sag.rearK1", "Rate K1", "N/mm")}${input("sag.rearK2", "Rate K2", "N/mm")}${input("sag.rearTransition", "K1→K2 at", "mm shock")}${input("sag.rearPreload", "Preload", "mm")}${input("sag.rearSpringCount", "Springs", "count")}${input("sag.rearUnsprungMass", "Unsprung mass", "kg")}</div>`)}
+      ${panel("Front fork springs", `<div class="fields">${input("sag.frontK1", "Rate K1", "N/mm")}${input("sag.frontK2", "Rate K2", "N/mm")}${input("sag.frontTransition", "K1→K2 at", "mm")}${input("sag.frontPreload", "Preload", "mm")}${input("sag.frontSpringCount", "Springs", "count")}${input("sag.frontUnsprungMass", "Unsprung mass", "kg")}</div>`)}
+      ${panel("Linked inputs", linkedList([["Axle loads", `${state.meta.loadCase}`, "Stance mass properties"], ["Rear leverage", outputs.suspension?.ok ? fmt(outputs.suspension.leverageRatio.value, 2) : "—", "Suspension geometry"], ["Fork air", `${fmt(state.suspension.forkAirVolume, 0)} ml · Ø${fmt(state.suspension.forkAirPistonDiameter, 0)} mm`, "Suspension geometry"]]))}`;
+    const results = o?.loadCases ? `${panel("Loaded motorcycle", sagDiagram(), `${esc(state.meta.loadCase)} against the unladen reference.`)}
+      ${panel("Sag by load case", `${canvasChart("sagChart", "Front and rear sag as a percentage of usable stroke for each load case", 180)}${legend([["Front fork", "#266b92"], ["Rear shock", "#a66516"], ["Typical rider sag", "rgba(31,107,80,.25)"]])}${dataTable(["Case", "Front sag", "Rear sag", "Rake", "Trail", "Wheelbase", "Clearance"], caseRows)}`, "Sag is member stroke: fork compression and shock stroke, as % of usable stroke.")}
+      ${panel("Load vs deflection", `${canvasChart("loadDeflectionChart", "Front and rear wheel supporting force against wheel deflection with sag, transition, bump-stop and travel-limit markers", 300)}<div class="chart-legend">${Object.entries({ sag: "Load-case sag", transition: "Spring transition", bumpstop: "Bump stop", limit: "Travel limit" }).map(([kind, label]) => `<span><i style="background:${markerColours[kind]}"></i>${esc(label)}</span>`).join("")}<span><i style="background:#1f6b50"></i>Front wheel</span><span><i style="background:#a66516"></i>Rear wheel</span></div>${unreachable.length ? `<div class="notice warning compact"><strong>Not reached in usable travel:</strong> ${esc(unreachable.join("; "))}.</div>` : ""}`, "Wheel-referred force against wheel travel. Every sag above sits on these curves.")}
+      ${panel("Wheel rate through travel", `${canvasChart("wheelRateChart", "Front and rear wheel rate against wheel travel", 240)}${legend([["Front", "#1f6b50"], ["Rear", "#a66516"]])}`, "Slope of the curves above. Steps are spring transitions, the bump stop and fork air.")}` : "";
+    const notes = notesRail("sag", {
+      why: "Sag puts the bike in the middle of its travel and sets the ride height that every loaded-geometry number depends on. Ride frequency is the best single measure of how stiff the bike feels.",
+      checksTitle: "Typical range · road set-up",
+      how: ["Each axle load (minus unsprung mass) is solved against the spring force law at the wheel.", "Rear: spring force × local motion ratio + bump stop. Front: fork coils + isothermal fork air.", "Ride frequency f = √(k/m)/2π with k the local wheel rate at sag and m the sprung axle mass.", "Static = Kerb case, rider = Solo rider case, duals = Rider + pillion."]
+    });
+    return page(tab, { inputs, results, notes, kpis });
+  }
+  function drawSagCharts() {
+    const o = outputs.sag; if (!o?.loadCases) return;
+    const avail = o.rearShockTravelAvailable?.value, maxFront = Math.min(Number(state.stance.frontTravel), Number(state.suspension.frontWheelToMetal));
+    barChart(document.querySelector("#sagChart"), {
+      xLabel: "Sag (% of usable stroke)", labelWidth: 120, band: bandFor("riderSag"), xMax: 100,
+      rows: Object.entries(o.loadCases).map(([name, row]) => ({ label: name, bars: [{ value: row.frontForkSag / maxFront * 100, colour: "#266b92", text: `${fmt(row.frontForkSag / maxFront * 100, 0)}%` }, { value: avail ? row.rearShockSag / avail * 100 : NaN, colour: "#a66516", text: `${fmt(row.rearShockSag / avail * 100, 0)}%` }] }))
+    });
+    drawLoadDeflection(document.querySelector("#loadDeflectionChart"));
+    const front = rateCurve(o.loadCurves?.front), rear = rateCurve(o.loadCurves?.rear);
+    xyChart(document.querySelector("#wheelRateChart"), {
+      xLabel: "Wheel travel (mm)", yLabel: "Wheel rate (N/mm)",
+      yMax: (() => { const r = [...front, ...rear].map(x => x.rate).filter(Number.isFinite).sort((a, b) => a - b); return r.length > 6 ? r[Math.floor(r.length * 0.9)] * 1.4 : undefined; })(),
+      series: [{ data: front.map(r => [r.travel, r.rate]), colour: "#1f6b50" }, { data: rear.map(r => [r.travel, r.rate]), colour: "#a66516" }]
+    });
   }
 
   function linkedField(path, label, unit) {
     const owner = path.split(".")[0];
     return `<div class="field"><label>${esc(label)} · linked</label><div class="field-row"><input value="${esc(get(path))}" readonly aria-readonly="true"><span class="unit-label">${esc(unit)}</span></div><small>Owner: ${esc(owner)} · source revision ${state.meta.domainRevisions?.[owner] || 1}</small></div>`;
-  }
-
-  function renderSuspension(tab) {
-    const o = outputs.suspension;
-    const linkageInputs = state.suspension.rearArchitecture === "linkage" ? `<h3 style="margin-top:20px">Linkage hardpoints</h3><div class="fields">${input("suspension.dogboneSwingX","Dogbone swingarm X","mm")}${input("suspension.dogboneSwingZ","Dogbone swingarm Z","mm")}${input("suspension.rockerPivotX","Rocker pivot X","mm")}${input("suspension.rockerPivotZ","Rocker pivot Z","mm")}${input("suspension.rockerDogboneX","Rocker dogbone X","mm")}${input("suspension.rockerDogboneZ","Rocker dogbone Z","mm")}${input("suspension.rockerShockX","Rocker shock X","mm")}${input("suspension.rockerShockZ","Rocker shock Z","mm")}</div>` : `<h3 style="margin-top:20px">Direct-mount hardpoints</h3><div class="fields">${input("suspension.shockSwingX","Shock swingarm mount X","mm")}${input("suspension.shockSwingZ","Shock swingarm mount Z","mm")}</div>`;
-    return `<section class="view ${activeTab === tab.id ? "active" : ""}" id="view-${tab.id}">${viewHead(tab)}
-      <div class="grid two"><article class="panel"><h3>Front fork and rear architecture</h3><div class="fields">
-        ${input("suspension.rearArchitecture","Rear architecture","",{type:"select",values:[{value:"direct",label:"Direct mount"},{value:"linkage",label:"Linkage mount"}]})}
-        ${input("suspension.forkLength","Fork length","mm")}${input("suspension.forkStanchion","Stanchion OD","mm")}${input("suspension.forkAirVolume","Initial air volume per leg","ml")}${input("suspension.forkAirPistonDiameter","Air piston diameter","mm")}${input("suspension.frontWheelToMetal","Front wheel-to-metal","mm")}${input("suspension.rearWheelToMetal","Rear wheel-to-metal","mm")}${input("suspension.shockFrameX","Shock frame mount X","mm")}${input("suspension.shockFrameZ","Shock frame mount Z","mm")}${input("suspension.bumpStopStart","Bump-stop engagement","mm wheel")}${input("suspension.bumpStopRate","Bump-stop wheel rate","N/mm")}${input("suspension.sweepSteps","Sweep stations","count")}
-      </div>${linkageInputs}<h3 style="margin-top:20px">Linked geometry</h3><div class="fields">${linkedField("stance.rearAxleX","Rear axle X","mm")}${linkedField("stance.rearAxleZ","Rear axle Z","mm")}${linkedField("steering.upperOffset","Upper offset","mm")}${linkedField("steering.bracketSpan","Bracket span","mm")}${linkedField("sag.rearK1","Rear K1","N/mm")}</div></article>
-      <div><article class="panel"><h3>Kinematics and fork outputs</h3>${invalidNotice(o,"Suspension geometry")}<div class="metric-grid">${metric("Initial shock length",o.initialShockLength,{owner:"suspension"})}${metric("Shock travel",o.shockTravel,{owner:"suspension"})}${metric("Usable wheel travel",o.usableWheelTravel,{owner:"suspension"})}${metric("Average motion ratio",o.averageMotionRatio,{owner:"suspension",digits:3})}${metric("MR extension",o.motionRatioStart,{owner:"suspension",digits:3})}${metric("MR mid",o.motionRatioMid,{owner:"suspension",digits:3})}${metric("MR bump",o.motionRatioEnd,{owner:"suspension",digits:3})}${metric("Leverage ratio",o.leverageRatio,{owner:"suspension",digits:2})}${metric("MR progression",o.progression,{owner:"suspension"})}${metric("Wheel rate extension",o.wheelRateStart,{owner:"suspension"})}${metric("Wheel rate mid",o.wheelRateMid,{owner:"suspension"})}${metric("Wheel rate bump",o.wheelRateEnd,{owner:"suspension"})}${metric("Air compression",o.forkAirCompression,{owner:"suspension",digits:2})}${metric("End air pressure",o.forkEndPressure,{owner:"suspension",digits:2})}</div></article>${loadDeflectionPanel()}<article class="panel"><h3>Motion ratio through travel</h3>${canvasChart("suspensionChart","Shock-to-wheel motion ratio through rear-wheel travel")}</article><article class="panel"><h3>Front-travel geometry sweep</h3><div class="table-wrap"><table><thead><tr><th>Front travel</th><th>Rake</th><th>Trail</th><th>Wheelbase</th><th>Clearance</th></tr></thead><tbody>${(o.frontTravelSweep || []).map(row=>`<tr><td>${fmt(row.frontTravel,1)} mm</td><td>${fmt(row.rake,2)} deg</td><td>${fmt(row.trail,1)} mm</td><td>${fmt(row.wheelbase,1)} mm</td><td>${fmt(row.clearance,1)} mm</td></tr>`).join("")}</tbody></table></div></article></div></div>
-    </section>`;
-  }
-
-  function renderAntiSquat(tab) {
-    const o = outputs.antiSquat;
-    return `<section class="view ${activeTab === tab.id ? "active" : ""}" id="view-${tab.id}">${viewHead(tab)}<div class="grid two"><article class="panel"><h3>Study inputs</h3><div class="fields">${input("antiSquat.driveType","Final-drive type","",{type:"select",values:["chain","belt","shaft"]})}${input("antiSquat.analysisSteps","Analysis stations","count")}</div><h3 style="margin-top:20px">Linked final-drive geometry</h3><div class="fields">${linkedField("powertrain.frontTeeth","Front sprocket","teeth")}${linkedField("powertrain.rearTeeth","Rear sprocket","teeth")}${linkedField("powertrain.chainPitch","Chain pitch","mm")}${linkedField("powertrain.driveSprocketX","Drive centre X","mm")}${linkedField("powertrain.driveSprocketZ","Drive centre Z","mm")}${linkedField("stance.wheelbase","Wheelbase","mm")}</div><div class="notice warning" style="margin-top:14px">The shaft option is only a geometric swingarm-pivot baseline. Bevel-gear torque reaction and special link systems are not evaluated.</div></article><article class="panel"><h3>Drive anti-squat through travel</h3>${invalidNotice(o,"Anti-squat")}<div class="metric-grid">${metric("Extension",o.start,{owner:"antiSquat"})}${metric("Mid travel",o.mid,{owner:"antiSquat"})}${metric("Full usable travel",o.end,{owner:"antiSquat"})}${metric("Squat ratio",o.squatRatio,{owner:"antiSquat",digits:3})}${metric("Reciprocal identity",o.reciprocalCheck,{owner:"antiSquat",digits:3})}${metric("Through-travel range",o.range,{owner:"antiSquat"})}${metric("Average gradient",o.averageGradient,{owner:"antiSquat",digits:3})}${metric("Neutral crossover",o.neutralCrossover,{owner:"antiSquat"})}${metric("Force centre X",o.extensionForceCentreX,{owner:"antiSquat"})}${metric("Force centre Z",o.extensionForceCentreZ,{owner:"antiSquat"})}</div><div class="notice" style="margin-top:14px">${esc(DATA.sourceNotes.antiSquat)}</div>${canvasChart("antiSquatChart","Anti-squat percentage through rear suspension travel")}</article></div></section>`;
-  }
-
-  function renderSag(tab) {
-    const o=outputs.sag;
-    const loadRows=Object.entries(o.loadCases||{}).map(([name,row])=>`<tr><td>${esc(name)}</td><td>${fmt(row.frontForkSag,1)} mm</td><td>${fmt(row.rearShockSag,1)} mm</td><td>${fmt(row.rake,2)} deg</td><td>${fmt(row.trail,1)} mm</td><td>${fmt(row.wheelbase,1)} mm</td><td>${fmt(row.clearance,1)} mm</td><td><span class="badge ${row.ok?"review":"conflict_invalid"}">${row.ok?"calculated":"invalid"}</span></td></tr>`).join("");
-    return `<section class="view ${activeTab===tab.id?"active":""}" id="view-${tab.id}">${viewHead(tab)}<div class="grid two"><article class="panel"><h3>Rear spring model</h3><div class="fields">${input("sag.rearK1","Rear K1","N/mm")}${input("sag.rearK2","Rear K2","N/mm")}${input("sag.rearTransition","Rear transition / COP","mm shock")}${input("sag.rearPreload","Rear preload","mm")}${input("sag.rearSpringCount","Rear spring count","count")}${input("sag.rearUnsprungMass","Rear unsprung mass","kg")}</div><h3 style="margin-top:20px">Front fork spring model</h3><div class="fields">${input("sag.frontK1","Front K1","N/mm")}${input("sag.frontK2","Front K2","N/mm")}${input("sag.frontTransition","Front transition / COP","mm")}${input("sag.frontPreload","Front preload","mm")}${input("sag.frontSpringCount","Fork spring count","count")}${input("sag.frontUnsprungMass","Front unsprung mass","kg")}</div><div class="notice" style="margin-top:16px"><strong>Suspension-member sag.</strong> Static means the Kerb case; rider means Solo rider. Front values are fork compression. Rear values are shock stroke interpolated from the linkage kinematics at the solved load equilibrium. Wheel movement is used only for loaded-geometry calculations.</div></article><div><article class="panel"><h3>Calculated member sag & loaded geometry</h3>${invalidNotice(o,"Sag and loaded geometry")}<div class="metric-grid">${metric(`Front fork sag · ${state.meta.loadCase}`,o.frontForkSag,{owner:"sag"})}${metric(`Rear shock sag · ${state.meta.loadCase}`,o.rearShockSag,{owner:"sag"})}${metric("Front fork static sag",o.expectedFrontForkStaticSag,{owner:"sag"})}${metric("Rear shock static sag",o.expectedRearShockStaticSag,{owner:"sag"})}${metric("Front fork rider sag",o.expectedFrontForkRiderSag,{owner:"sag"})}${metric("Rear shock rider sag",o.expectedRearShockRiderSag,{owner:"sag"})}${metric("Front fork static stroke used",o.expectedFrontForkStaticPercent,{owner:"sag"})}${metric("Rear shock static stroke used",o.expectedRearShockStaticPercent,{owner:"sag"})}${metric("Front fork rider stroke used",o.expectedFrontForkRiderPercent,{owner:"sag"})}${metric("Rear shock rider stroke used",o.expectedRearShockRiderPercent,{owner:"sag"})}${metric("Active front fork stroke used",o.frontForkTravelUsed,{owner:"sag"})}${metric("Active rear shock stroke used",o.rearShockTravelUsed,{owner:"sag"})}${metric("Loaded rake",o.loadedRake,{owner:"sag"})}${metric("Loaded trail",o.loadedTrail,{owner:"sag"})}${metric("Loaded wheelbase",o.loadedWheelbase,{owner:"sag"})}${metric("Ground clearance",o.loadedClearance,{owner:"sag"})}${metric("Front wheel rate",o.frontWheelRate,{owner:"sag"})}${metric("Rear wheel rate",o.rearWheelRate,{owner:"sag"})}${metric("Front frequency",o.frontFrequency,{owner:"sag"})}${metric("Rear frequency",o.rearFrequency,{owner:"sag"})}</div></article><article class="panel"><h3>Member sag and geometry through load cases</h3><div class="table-wrap"><table><thead><tr><th>Load case</th><th>Front fork sag</th><th>Rear shock sag</th><th>Rake</th><th>Trail</th><th>Wheelbase</th><th>Clearance</th><th>State</th></tr></thead><tbody>${loadRows}</tbody></table></div>${canvasChart("loadedGeometryChart","Calculated unladen and loaded rake, trail, wheelbase and ground clearance")}</article></div></div></section>`;
-  }
-
-  function renderSensitivity(tab) {
-    const o = outputs.sensitivity;
-    const options = ["steering.upperOffset","stance.rearAxleZ","suspension.shockFrameX","suspension.rockerPivotZ","sag.rearPreload","powertrain.driveSprocketZ","electrical.series"];
-    return `<section class="view ${activeTab === tab.id ? "active" : ""}" id="view-${tab.id}">${viewHead(tab,true)}<div class="grid two"><article class="panel"><h3>Frozen study definition</h3><div class="fields">${input("sensitivity.parameter","Parameter","",{type:"select",values:options})}${input("sensitivity.step","Central-difference step","native units")}${input("sensitivity.tolerance","Manufacturing / adjustment tolerance","native units")}</div><div class="notice" style="margin-top:14px">Baseline revision ${state.meta.revision} is read-only for this run. Results are proposals and cannot overwrite an owning tab. The single-parameter tolerance effect is not a multi-variable statistical RSS.</div></article><article class="panel"><h3>Local response</h3>${invalidNotice(o,"Sensitivity study")}<div class="table-wrap"><table><thead><tr><th>Output</th><th class="numeric">Baseline</th><th class="numeric">− step</th><th class="numeric">+ step</th><th class="numeric">Central derivative</th><th class="numeric">Forward / backward</th><th>Response</th><th class="numeric">Tolerance effect</th><th class="numeric">Worst case</th></tr></thead><tbody>${(o.rows || []).map(row => `<tr><td>${esc(row.output)}</td><td class="numeric">${fmt(row.base,3)}</td><td class="numeric">${fmt(row.minus,3)}</td><td class="numeric">${fmt(row.plus,3)}</td><td class="numeric">${fmt(row.derivative,4)}</td><td class="numeric">${fmt(row.forward,4)} / ${fmt(row.backward,4)}</td><td><span class="badge ${row.valid ? "review" : "conflict_invalid"}">${esc(row.response)}</span><br>${fmt(row.asymmetry,1)}% asymmetry</td><td class="numeric">${fmt(row.rssAtTolerance,4)}</td><td class="numeric">${fmt(row.arithmeticWorstCase,4)}</td></tr>`).join("")}</tbody></table></div></article></div></section>`;
   }
 
   // ---- Compact helpers shared by Transmission, Motor sizing and Braking ------------------
@@ -698,19 +1058,20 @@
     const yStep = niceCeilStep((yRawMax - yMin) / 5);
     const yMax = cfg.yMax ?? yMin + Math.ceil((yRawMax - yMin) / yStep) * yStep;
     const lines = Math.max(1, Math.round((yMax - yMin) / yStep));
-    const y2Step = hasY2 ? niceCeilStep(Math.max(...values("y2"), 1e-6) / lines) : 0;
-    const y2Max = y2Step * lines;
+    const y2Min = cfg.y2Min ?? 0;
+    const y2Step = hasY2 ? niceCeilStep((Math.max(...values("y2"), y2Min + 1e-6) - y2Min) / lines) : 0;
+    const y2Max = y2Min + y2Step * lines;
     const plotW = W - pad.l - pad.r, plotH = H - pad.t - pad.b;
     const tx = x => pad.l + (x - xMin) / Math.max(1e-9, xMax - xMin) * plotW;
     const ty = y => pad.t + (yMax - y) / Math.max(1e-9, yMax - yMin) * plotH;
-    const ty2 = y => pad.t + (y2Max - y) / Math.max(1e-9, y2Max) * plotH;
+    const ty2 = y => pad.t + (y2Max - y) / Math.max(1e-9, y2Max - y2Min) * plotH;
     ctx.clearRect(0, 0, W, H);
     ctx.font = "11px Inter, system-ui"; ctx.lineWidth = 1; ctx.strokeStyle = "#e3e6e2"; ctx.fillStyle = "#61717b";
     for (let i = 0; i <= lines; i += 1) {
       const y = pad.t + plotH * i / lines;
       ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(W - pad.r, y); ctx.stroke();
       ctx.textAlign = "right"; ctx.fillText(axisLabel(yMax - (yMax - yMin) * i / lines), pad.l - 8, y + 4);
-      if (hasY2) { ctx.textAlign = "left"; ctx.fillText(axisLabel(y2Max - y2Max * i / lines), W - pad.r + 8, y + 4); }
+      if (hasY2) { ctx.textAlign = "left"; ctx.fillText(axisLabel(y2Max - (y2Max - y2Min) * i / lines), W - pad.r + 8, y + 4); }
     }
     ctx.textAlign = "center";
     for (let x = xMin; x <= xMax + 1e-9; x += xStep) {
@@ -724,6 +1085,10 @@
     ctx.save(); ctx.translate(14, pad.t + plotH / 2); ctx.rotate(-Math.PI / 2); ctx.fillText(cfg.yLabel || "", 0, 0); ctx.restore();
     if (hasY2) { ctx.save(); ctx.translate(W - 12, pad.t + plotH / 2); ctx.rotate(Math.PI / 2); ctx.fillText(cfg.y2Label || "", 0, 0); ctx.restore(); }
     ctx.save(); ctx.beginPath(); ctx.rect(pad.l, pad.t - 2, plotW + 2, plotH + 4); ctx.clip();
+    (cfg.bands || []).forEach(band => {
+      const yOf = band.axis === "y2" ? ty2 : ty, top = yOf(Math.max(band.y0, band.y1)), bottom = yOf(Math.min(band.y0, band.y1));
+      ctx.fillStyle = band.colour || "rgba(31,107,80,.10)"; ctx.fillRect(pad.l, top, plotW, bottom - top);
+    });
     (cfg.hLines || []).forEach(line => {
       const y = (line.axis === "y2" ? ty2 : ty)(line.y);
       ctx.strokeStyle = line.colour || "#8f9b97"; ctx.setLineDash([5, 4]); ctx.lineWidth = 1.4;
@@ -780,10 +1145,7 @@
     const gearInputs = Array.from({ length: gearCount }, (_, i) => input(`powertrain.gear${i + 1}`, gearCount === 1 ? "Reduction ratio" : `Gear ${i + 1}`, "ratio", { step: "0.001" })).join("");
     const catalogue = (DATA.finalDriveCatalogue || []).map(item => ({ value: item.id, label: item.id === "custom" ? "Custom" : `${item.label} · ${item.pitch} mm` }));
     const rows = ok ? o.rows.map(row => `<tr><td>${gearCount === 1 ? "Single" : `G${row.gear}`}</td><td class="numeric">${fmt(row.gearRatio, 3)}</td><td class="numeric"><strong>${fmt(row.overallRatio, 3)}</strong></td><td class="numeric">${row.stepPercent === null ? "—" : `${fmt(row.stepPercent, 1)}%`}</td><td class="numeric">${fmt(row.speedAtMaxRpm, 1)}</td><td class="numeric ${row.cruiseOverRedline ? "over" : ""}">${row.rpmAtCruise === null ? "—" : fmt(row.rpmAtCruise, 0)}</td><td class="numeric">${fmt(row.wheelTorqueAtPeak, 0)}</td><td class="numeric">${fmt(row.tractiveForceAtPeak, 0)}</td></tr>`).join("") : "";
-    return `<section class="view ${activeTab === tab.id ? "active" : ""}" id="view-${tab.id}">${viewHead(tab)}
-      ${kpiStrip("powertrain", tiles)}${invalidNotice(o, "Transmission")}
-      <div class="grid two">
-        <div>
+    const inputs = `
           <article class="panel"><h3>Ratio stack</h3><div class="fields">
             ${input("powertrain.gearCount", "Gear count", "", { type: "select", values: [1, 2, 3, 4, 5, 6].map(n => ({ value: n, label: n === 1 ? "1 · single-speed reduction" : `${n} speeds` })) })}
             ${input("powertrain.primaryRatio", "Primary ratio", "ratio", { step: "0.001" })}
@@ -815,19 +1177,22 @@
             ${input("powertrain.proposedFrontTeeth", "Proposed front", "teeth")}
             ${input("powertrain.proposedRearTeeth", "Proposed rear", "teeth")}
           </div></article>
-        </div>
-        <div>
+`;
+    const results = `
           <article class="panel"><h3>Final-drive construction</h3>${powertrainDiagram()}</article>
           <article class="panel"><h3>Per-gear matrix</h3><div class="table-wrap"><table class="dense"><thead><tr><th>Gear</th><th class="numeric">Ratio</th><th class="numeric">Overall</th><th class="numeric">Step</th><th class="numeric">km/h @ max RPM</th><th class="numeric">RPM @ ${fmt(p.cruiseSpeed, 0)} km/h</th><th class="numeric">Wheel N·m @ peak</th><th class="numeric">Tractive N @ peak</th></tr></thead><tbody>${rows}</tbody></table></div>
             <p class="diagram-note">Wheel torque and tractive force use the committed peak motor torque and driveline efficiency. RPM in red exceeds max RPM.</p></article>
           <article class="panel"><h3>Road speed vs motor RPM</h3>${canvasChart("speedRpmChart", "Road speed against motor RPM for every gear", 300)}${legend(ok ? o.rows.map(row => [gearCount === 1 ? "Single speed" : `G${row.gear}`, SERIES_COLOURS[row.gear - 1]]).concat([[`Cruise ${fmt(p.cruiseSpeed, 0)} km/h`, "#8f9b97", true]]) : [])}</article>
-        </div>
-      </div>
       ${ok ? chainPanels(o, linkUnit) : ""}
       ${ok ? comboPanel(o, linkUnit) : ""}
       ${ok ? proposedPanel(o, linkUnit) : ""}
       ${transmissionComparisonPanel()}
-    </section>`;
+`;
+    const notes = notesRail("powertrain", {
+      why: "The overall ratio trades launch and grade torque against top speed and motor RPM. The chain has to fit the real hardpoints with adjuster to spare and survive peak first-gear torque.",
+      how: [esc(DATA.sourceNotes.transmission), "Overall ratio = primary × gear × rear/front teeth; road speed = RPM / ratio × tyre circumference.", "Peak tension = peak motor torque × primary × first gear / front pitch radius (no efficiency credit).", "Wear recurrence: the same tooth meets the same link every teeth / gcd(teeth, links) revolutions."]
+    });
+    return page(tab, { inputs, results, notes, kpis: `${kpiStrip("powertrain", tiles)}${invalidNotice(o, "Transmission")}` });
   }
   function chainPanels(o, linkUnit) {
     const c = o.chain, p = state.powertrain;
@@ -970,7 +1335,8 @@
       kpi("Base RPM", o.baseRpm, 0, `CPSR ${fmt(m.constantPowerRatio, 2)}`),
       kpi("Max RPM", o.maxRpm, 0, `${fmt(m.targetTopSpeed, 0)} km/h, tallest ratio`),
       kpi("Launch wheel torque", o.launchWheelTorque, 0, `${fmt(o.launchAccel.value, 2)} g uncapped`),
-      kpi("Grade torque", o.gradeTorque, 1, o.gradePower.value === null ? "no grade target" : `${fmt(o.gradePower.value, 1)} kW continuous`)
+      kpi("Grade torque", o.gradeTorque, 1, o.gradePower.value === null ? "no grade target" : `${fmt(o.gradePower.value, 1)} kW continuous`),
+      kpi("Power-to-weight", { value: pt?.ok && masses?.ok ? pt.peakPower.value / masses.totalMass * 1000 : null, unit: "kW/t", definition: "Committed peak power over the active load-case mass" }, 0, `committed · ${state.meta.loadCase}`)
     ] : [];
     const ratioRows = linked ? (pt?.ok ? pt.rows.map(row => [pt.rows.length === 1 ? "Overall ratio" : `G${row.gear} overall`, fmt(row.overallRatio, 3), ""]) : [["Overall ratios", "Transmission unavailable", ""]]) : [];
     const req = ok ? o.requirements.map(item => `<tr class="${item.id === o.governing.id ? "governs" : ""}"><td>${esc(item.label)}</td><td class="numeric">${fmt(item.torque, 1)} N·m</td><td class="numeric">${fmt(item.torque * o.baseRpm.value * 2 * Math.PI / 60 / 1000, 1)} kW</td><td>${item.id === o.governing.id ? "<strong>governs</strong>" : ""}</td></tr>`).join("") : "";
@@ -990,10 +1356,7 @@
       ${cmp("Top speed (road load)", Number(m.targetTopSpeed), c.topSpeed, "km/h", 1, "higher")}
       ${cmp(`Gradeability at ${fmt(m.gradeSpeed, 0)} km/h`, Number(m.gradePercent) || null, c.gradeability, "%", 1, "higher")}
     </tbody></table></div><p class="diagram-note">Judge the committed motor by the performance rows: red Δ means it falls short of that target. Torque, power and RPM rows are informational, because a different envelope shape (base speed) can meet the same targets. Gradeability is tractive only; tyre grip and wheelie on steep grades are not evaluated.</p>` : (ok ? `<div class="notice warning">The committed envelope is incomplete; enter peak torque, base and max RPM below.</div>` : "");
-    return `<section class="view ${activeTab === tab.id ? "active" : ""}" id="view-${tab.id}">${viewHead(tab)}
-      ${kpiStrip("motor", tiles)}${invalidNotice(o, "Motor sizing")}
-      <div class="grid two">
-        <div>
+    const inputs = `
           <article class="panel"><h3>Performance targets</h3><div class="fields">
             ${input("motor.targetTopSpeed", "Max speed", "km/h")}
             ${input("motor.gradePercent", "Inclination", "%", { help: `${fmt(Math.atan(Number(m.gradePercent) / 100) * 180 / Math.PI, 1)}°` })}
@@ -1006,6 +1369,11 @@
             ${input("motor.constantPowerRatio", "Constant-power speed ratio", "max/base", { step: "0.1", help: "Typical PMSM 2–3.5" })}
             ${input("motor.inertiaFactor", "Rotating-mass factor", "×", { step: "0.01" })}
           </div></article>
+          <article class="panel"><h3>Road load</h3><div class="fields">
+            ${input("vehicle.rollingResistance", "Rolling resistance Crr", "", { step: "0.001" })}
+            ${input("vehicle.dragCoefficientArea", "Drag area CdA", "m²", { step: "0.01" })}
+            ${input("vehicle.airDensity", "Air density", "kg/m³", { step: "0.001" })}
+          </div><p class="diagram-note">Also drives the Battery consumption-vs-speed curve.</p></article>
           <article class="panel"><h3>Transmission ratio</h3><div class="fields">
             ${input("motor.ratioSource", "Ratio source", "", { type: "select", full: true, values: [{ value: "linked", label: "Linked · overall ratios from the Transmission tab" }, { value: "manual", label: "Manual · single overall ratio" }] })}
             ${linked ? "" : input("motor.manualRatio", "Overall ratio", "motor : wheel", { step: "0.01", full: true, help: "Single-speed overall reduction, e.g. 9.91" })}
@@ -1014,7 +1382,6 @@
           <h4 class="subhead">Linked vehicle</h4>
           ${linkedList([
             ["Mass", masses?.ok ? `${fmt(masses.totalMass, 1)} kg` : "—", `${state.meta.loadCase} · mass properties`],
-            ["CdA / Crr / ρ", `${fmt(state.vehicle.dragCoefficientArea, 2)} m² · ${fmt(state.vehicle.rollingResistance, 3)} · ${fmt(state.vehicle.airDensity, 3)}`, "Vehicle calculators"],
             ["Rear tyre radius", rearTyre.ok ? `${fmt(rearTyre.radius, 1)} mm` : "—", sourceTag("stance")],
             ["Driveline efficiency", fmt(p.drivelineEfficiency, 2), "Transmission"],
             ["Wheelie limit", ok ? `${fmt(o.wheelieLimit.value, 2)} g` : "—", "linked CG"]
@@ -1036,8 +1403,8 @@
             ${input("powertrain.dutyGear", "Duty gear", "gear")}
           </div>
           <div class="kpi-mini">${pt?.ok ? [kpi("Duty shaft power", pt.shaftPower, 2), kpi("Duty energy", pt.dutyEnergy, 2), kpi("Duty road speed", pt.dutyRoadSpeed, 1), kpi("Committed peak power", pt.peakPower, 1)].join("") : invalidNotice(pt, "Duty case")}</div></article>
-        </div>
-        <div>
+`;
+    const results = `
           <article class="panel"><h3>What sets the motor</h3>${ok ? `<div class="table-wrap"><table class="dense"><thead><tr><th>Target</th><th class="numeric">Peak torque needed</th><th class="numeric">Peak power</th><th></th></tr></thead><tbody>${req}</tbody></table></div><p class="diagram-note">${esc(DATA.sourceNotes.motorSizing)}</p>` : ""}</article>
           <article class="panel"><h3>Required vs committed</h3>${comparison}</article>
           <article class="panel"><h3>Motor torque & power vs RPM</h3>${canvasChart("motorEnvelopeChart", "Required and committed motor torque and power against motor RPM", 300)}${legend([["Required torque", "#1f6b50"], ["Required power", "#1f6b50", true], ["Committed torque", "#d75f36"], ["Committed power", "#d75f36", true]])}</article>
@@ -1045,10 +1412,14 @@
           <article class="panel"><h3>Wheel power vs road speed</h3>${canvasChart("wheelPowerChart", "Wheel power per gear against road speed with road-load power", 300)}${legend(wheelLegend(o))}</article>
           <article class="panel"><h3>Speed vs time</h3>${canvasChart("accelChart", "Road speed against time for required and committed motors", 280)}${legend([["Required motor", "#1f6b50"], ["Committed motor", "#d75f36"], ["Targets", "#6e56a0"]])}</article>
           <article class="panel"><h3>Torque vs power</h3><p class="panel-intro">The motor operating envelope traced from 0 to max RPM, with the grade and top-speed duty points it has to cover.</p>${canvasChart("torquePowerChart", "Motor torque against motor power along the envelope", 280)}${legend([["Required envelope", "#1f6b50"], ["Committed envelope", "#d75f36"], ["Duty points", "#6e56a0"]])}</article>
-        </div>
-      </div>
-      ${powertrainBenchmarkPanel()}
-    </section>`;
+`;
+    const notes = notesRail("motor_sizing", {
+      why: "Turns the product promise (top speed, hill start, 0–100) into a motor specification, through the real ratios, mass and road load, so the motor, inverter and pack are sized against the same numbers.",
+      checksTitle: "Typical range",
+      how: [esc(DATA.sourceNotes.motorSizing), "Road load = m·g·(Crr·cosθ + sinθ) + ½·ρ·CdA·v².", "Launch is capped at the rigid-body wheelie limit (CG ahead of the rear axle / CG height) unless switched off."]
+    });
+    return page(tab, { inputs, results, notes, kpis: `${kpiStrip("motor", tiles)}${invalidNotice(o, "Motor sizing")}`, after: `      ${powertrainBenchmarkPanel()}
+` });
   }
   function wheelLegend(o) {
     const gears = o?.ok && o.committed ? o.ratios.map((_, index) => [o.ratios.length === 1 ? "Committed motor" : `G${index + 1} committed`, o.ratios.length === 1 ? "#d75f36" : SERIES_COLOURS[index]]) : [];
@@ -1132,7 +1503,7 @@
     ] : [];
     const row = (label, a, bb, unit = "", digits = 1) => `<tr><th>${esc(label)}</th><td class="numeric">${typeof a === "string" ? a : fmt(a, digits)}${unit ? ` <small>${unit}</small>` : ""}</td><td class="numeric">${typeof bb === "string" ? bb : fmt(bb, digits)}${unit ? ` <small>${unit}</small>` : ""}</td></tr>`;
     const section = label => `<tr class="section-row"><th colspan="3">${esc(label)}</th></tr>`;
-    const results = ok ? `<div class="table-wrap"><table class="dense"><thead><tr><th></th><th class="numeric">Solo</th><th class="numeric">Rider + pillion</th></tr></thead><tbody>
+    const resultsTable = ok ? `<div class="table-wrap"><table class="dense"><thead><tr><th></th><th class="numeric">Solo</th><th class="numeric">Rider + pillion</th></tr></thead><tbody>
       ${section(`Load transfer at ${fmt(b.targetDecel, 2)} g`)}
       ${row("Rear static share φ", s.phi, d.phi, "", 3)}
       ${row("CG height / wheelbase χ", s.x, d.x, "", 3)}
@@ -1168,10 +1539,7 @@
       ${row("Wheelbase", s.wheelbase, d.wheelbase, "mm", 0)}
       ${row("Tyre radius F / R", `${fmt(s.frontRadius, 1)} / ${fmt(s.rearRadius, 1)}`, `${fmt(d.frontRadius, 1)} / ${fmt(d.rearRadius, 1)}`, "mm")}
     </tbody></table></div><p class="diagram-note">Linked from mass properties and Stance (${sourceTag("stance")}). Pillion mass is entered on Stance; with no pillion the two columns match.</p>` : "";
-    return `<section class="view ${activeTab === tab.id ? "active" : ""}" id="view-${tab.id}">${viewHead(tab)}
-      ${kpiStrip("braking", tiles)}${invalidNotice(o, "Braking")}
-      <div class="grid two">
-        <div>
+    const inputs = `
           <article class="panel"><h3>Test conditions</h3><div class="fields">
             ${input("braking.roadFriction", "Tyre–road friction μ", "μ", { step: "0.05" })}
             ${input("braking.targetDecel", "Target deceleration", "g", { step: "0.05" })}
@@ -1181,17 +1549,20 @@
           ${brakeHardwarePanel("front")}
           ${brakeHardwarePanel("rear")}
           <article class="panel"><h3>Linked vehicle</h3>${vehicleRows}</article>
-        </div>
-        <div>
-          <article class="panel"><h3>Results</h3>${results}<p class="diagram-note">${esc(DATA.sourceNotes.braking)}</p></article>
+`;
+    const results = `
+          <article class="panel"><h3>Results</h3>${resultsTable}</article>
           <article class="panel"><h3>Ideal brake-force distribution</h3><p class="panel-intro">Front vs rear braking force when both wheels are at the same μ (parabola), with the μ ${fmt(b.roadFriction, 2)} front-lock and rear-lock lines and the ${fmt(b.targetDecel, 2)} g iso-deceleration line.</p>${canvasChart("brakeDistributionChart", "Ideal front and rear braking force distribution", 340)}${legend([["Ideal, solo", "#1f6b50"], ["Ideal, rider + pillion", "#266b92"], ["Front lock (solo)", "#b84d56", true], ["Rear lock (solo)", "#a66516", true], ["Target deceleration", "#6e56a0", true]])}</article>
           <article class="panel"><h3>Lever & pedal effort vs deceleration</h3>${canvasChart("brakeEffortChart", "Hand-lever and foot-pedal force against deceleration", 280)}${legend([["Lever, front only, solo", "#1f6b50"], ["Lever, duals", "#1f6b50", true], ["Pedal, rear only, solo", "#a66516"], ["Pedal, duals", "#a66516", true]])}</article>
           <article class="panel"><h3>Line pressure vs deceleration</h3>${canvasChart("brakePressureChart", "Master-cylinder pressure against deceleration", 280)}${legend([["Front, solo", "#266b92"], ["Front, duals", "#266b92", true], ["Rear, solo", "#b84d56"], ["Rear, duals", "#b84d56", true]])}</article>
           <article class="panel"><h3>Stopping distance vs speed</h3>${canvasChart("brakeStopChart", "Stopping distance against initial speed", 280)}${legend([["Front only", "#266b92"], ["Rear only", "#b84d56"], ["Both at μ", "#1f6b50"], ["Rider + pillion", "#61717b", true]])}</article>
           <article class="panel"><h3>Maximum slip force by μ</h3>${slip}</article>
-        </div>
-      </div>
-    </section>`;
+`;
+    const notes = notesRail("braking", {
+      why: "Front brake hardware has to reach the adhesion limit with a comfortable lever force at every load case, without line pressures or clamp loads the caliper and master cylinder cannot take.",
+      how: [esc(DATA.sourceNotes.braking), "Clamp = wheel torque / (2·μpad·r_eff); line pressure = clamp / piston area per pad face.", "Lever force = pressure × master-cylinder area / (lever ratio × hydraulic efficiency)."]
+    });
+    return page(tab, { inputs, results, notes, kpis: `${kpiStrip("braking", tiles)}${invalidNotice(o, "Braking")}` });
   }
   function drawBrakingCharts() {
     const o = outputs.braking; if (!o?.ok) return;
@@ -1252,57 +1623,100 @@
     return `<article class="panel benchmark-panel"><div class="panel-title-row"><div><h3>Powertrain benchmark comparison</h3><p class="panel-intro">Manufacturer-rated context against the project’s entered constant-torque / constant-power envelope.</p></div><div class="field benchmark-filter"><label for="benchmarkCategory">Category</label><select id="benchmarkCategory" data-benchmark-category>${categories.map(category=>`<option ${category===benchmarkCategory?"selected":""}>${esc(category)}</option>`).join("")}</select></div></div><div class="benchmark-project"><strong>Project reference</strong><span>${fmt(projectPower,1)} kW calculated peak</span><span>${fmt(projectTorque,1)} N·m entered maximum</span><span>${fmt(projectFinal,3)} final ratio</span></div><div class="table-wrap"><table><thead><tr><th>Reference motorcycle</th><th class="numeric">Rated peak power</th><th class="numeric">Δ vs project</th><th class="numeric">Rated peak torque</th><th class="numeric">Δ vs project</th><th class="numeric">Published final drive</th><th class="numeric">Δ vs project</th><th>Evidence</th></tr></thead><tbody>${rows}</tbody></table></div><div class="notice warning" style="margin-top:14px">Descriptive reference only. Manufacturer figures are rated claims, missing gearing is left blank, and no benchmark proximity creates a target pass. Project peak power is calculated from entered maximum torque × base RPM; kinematic redline speed is not real top speed.</div><p class="diagram-note">Catalogue v${esc(catalogue.schemaVersion)} · sources accessed ${esc(catalogue.accessedOn)}</p></article>`;
   }
 
-  function renderVehicle(tab) {
-    const o = outputs.vehicle;
-    return `<section class="view ${activeTab === tab.id ? "active" : ""}" id="view-${tab.id}">${viewHead(tab,true)}<div class="grid two"><article class="panel"><h3>Study inputs</h3><div class="fields">${input("vehicle.studyGear","Selected gear","gear")}${input("vehicle.studyRpm","Study RPM","rpm")}${input("vehicle.studyTorque","Study torque","N·m")}${input("vehicle.targetSpeed","Target speed","km/h")}${input("vehicle.targetGrade","Target grade","%")}${input("vehicle.rollingResistance","Rolling resistance","coefficient",{step:"0.001"})}${input("vehicle.dragCoefficientArea","CdA","m²",{step:"0.01"})}${input("vehicle.airDensity","Air density","kg/m³",{step:"0.001"})}</div><div class="notice" style="margin-top:14px">Ratios, tyre and load-case mass are linked. This tab creates an explicit proposal and does not change Powertrain or Stance.</div></article><article class="panel"><h3>Study results</h3>${invalidNotice(o,"Vehicle study")}<div class="metric-grid">${metric("Road speed",o.speed,{owner:"vehicle"})}${metric("Wheel RPM",o.wheelRpm,{owner:"vehicle"})}${metric("Shaft power",o.shaftPower,{owner:"vehicle"})}${metric("Wheel torque",o.wheelTorque,{owner:"vehicle"})}${metric("Ideal tractive force",o.tractiveForce,{owner:"vehicle"})}${metric("Required road-load power",o.requiredPower,{owner:"vehicle"})}${metric("Required RPM",o.requiredRpm,{owner:"vehicle"})}${metric("Required shaft torque",o.requiredTorque,{owner:"vehicle"})}${metric("Power to weight",o.wattsPerKg,{owner:"vehicle"})}${metric("Power per tonne",o.kilowattsPerTonne,{owner:"vehicle"})}${metric("Horsepower per tonne",o.horsepowerPerTonne,{owner:"vehicle"})}${metric("Mass per kW",o.kilogramsPerKw,{owner:"vehicle"})}</div><button class="button" data-action="export-study" data-study="vehicle" style="margin-top:14px">Export proposal JSON</button></article></div></section>`;
-  }
-
+  // ---- Battery calculators --------------------------------------------------------------------------
   function renderBattery(tab) {
-    const o = outputs.battery;
-    return `<section class="view ${activeTab === tab.id ? "active" : ""}" id="view-${tab.id}">${viewHead(tab,true)}<div class="grid two"><article class="panel"><h3>Capacity, topology and range inputs</h3><div class="fields">${input("battery.targetRange","Target range","km")}${input("battery.consumption","Named consumption","Wh/km")}${input("battery.reserve","Reserve above load energy","%")}${input("battery.capacityDerate","Capacity derate","fraction",{step:"0.01"})}${input("battery.dischargeEfficiency","Discharge-path efficiency","fraction",{step:"0.01"})}${input("battery.studyVoltage","Proposed nominal voltage","V")}${input("battery.studyCapacityAh","Minimum proposed capacity","Ah")}${input("battery.runtimeCurrent","Constant-current case","A")}${input("battery.runtimePower","Constant-power case","kW")}${input("battery.auxiliaryPower","Auxiliary power","kW")}${input("battery.averageSpeed","Average speed","km/h")}</div><h3 style="margin-top:20px">AC charge study</h3><div class="fields">${input("battery.chargerPower","AC OBC input rating","kW")}${input("battery.chargeEfficiency","Charge efficiency","fraction",{step:"0.01"})}${input("battery.chargeTaperFactor","Charge taper factor","ratio",{step:"0.01"})}${input("battery.chargeStartSoc","Charge start SOC","%")}${input("battery.chargeEndSoc","Charge end SOC","%")}${input("battery.desiredChargeHours","Desired charge time","h")}${input("battery.supplyPhases","AC phases","",{type:"select",values:[{value:1,label:"Single phase"},{value:3,label:"Three phase"}]})}${input("battery.supplyVoltage","AC line voltage","V")}${input("battery.supplyCurrent","AC current limit","A")}${input("battery.supplyPowerFactor","Power factor","fraction",{step:"0.01"})}</div><div class="notice" style="margin-top:14px">The committed pack is read from Energy & E/E Integration. This study may only create a reviewed proposal; it cannot commit pack or charger values.</div></article><article class="panel"><h3>Capacity, charging and runtime results</h3>${invalidNotice(o,"Battery study")}<div class="metric-grid">${metric("Required load energy",o.requiredLoadEnergy,{owner:"battery"})}${metric("Required usable energy",o.requiredUsable,{owner:"battery"})}${metric("Required gross energy",o.requiredNominal,{owner:"battery"})}${metric("Delivered pack energy",o.deliveredEnergy,{owner:"battery"})}${metric("Estimated range",o.estimatedRange,{owner:"battery"})}${metric("Available AC supply",o.supplyPower,{owner:"battery"})}${metric("Governing pack charge power",o.packChargePower,{owner:"battery"})}${metric("Charge time",o.chargeTime,{owner:"battery"})}${metric("Charge current",o.actualChargeCurrent,{owner:"battery"})}${metric("Charge C-rate",o.actualChargeCRate,{owner:"battery",digits:3})}${metric("Required AC OBC input",o.requiredObcPower,{owner:"battery"})}${metric("Required AC line current",o.requiredLineCurrent,{owner:"battery"})}${metric("Constant-current runtime",o.currentRuntime,{owner:"battery"})}${metric("Constant-power runtime",o.constantPowerRuntime,{owner:"battery"})}${metric("Runtime distance",o.runtimeDistance,{owner:"battery"})}${metric("Required discharge C-rate",o.requiredCRate,{owner:"battery",digits:3})}${metric("Permitted nominal power",o.permittedPower,{owner:"battery"})}${metric("Proposed series",{value:o.proposedSeries,unit:"S",definition:"Ceiling of target nominal voltage divided by cell nominal voltage"},{owner:"battery"})}${metric("Proposed parallel",{value:o.proposedParallel,unit:"P",definition:"Maximum of minimum Ah, energy and current requirements"},{owner:"battery"})}${metric("Proposed cell count",{value:o.proposedCells,unit:"cells",definition:"Series multiplied by parallel count"},{owner:"battery"})}${metric("Proposed min voltage",{value:o.proposedMinV,unit:"V",definition:"Series count multiplied by cell minimum voltage"},{owner:"battery"})}${metric("Proposed nominal voltage",{value:o.proposedNominalV,unit:"V",definition:"Series count multiplied by cell nominal voltage"},{owner:"battery"})}${metric("Proposed max voltage",{value:o.proposedMaxV,unit:"V",definition:"Series count multiplied by cell maximum voltage"},{owner:"battery"})}${metric("Proposed capacity",{value:o.proposedAh,unit:"Ah",definition:"Parallel count multiplied by cell capacity"},{owner:"battery"})}${metric("Proposed gross energy",{value:o.proposedEnergy,unit:"kWh",definition:"Proposed nominal voltage multiplied by Ah"},{owner:"battery"})}${metric("Voltage delta",{value:o.voltageDelta,unit:"V",definition:"Proposed nominal voltage minus study target"},{owner:"battery"})}${metric("Energy margin",{value:o.energyMargin,unit:"kWh",definition:"Proposed gross energy minus required gross energy"},{owner:"battery"})}</div><div class="notice warning" style="margin-top:14px">Range, runtime and charging are first-order screens using the displayed assumptions. Temperature, ageing, electrochemistry and thermal limits remain not evaluated. DC fast charging is intentionally separate from AC OBC sizing.</div><button class="button primary" data-action="propose-battery" style="margin-top:14px">Create pack proposal</button></article></div></section>`;
+    const o = outputs.battery, ok = o?.ok === true, pack = outputs.electrical?.pack;
+    const c = ok ? o.consumptionCurve : null;
+    const kpis = ok ? kpiStrip("battery", [
+      kpi("Estimated range", o.estimatedRange, 0, `at ${fmt(state.battery.consumption, 0)} Wh/km named`),
+      kpi("Gross energy needed", o.requiredNominal, 1, pack ? `committed ${fmt(pack.nominalEnergyKWh, 1)} kWh` : ""),
+      kpi("Named consumption ≈", { value: c?.matchSpeed ?? null, unit: "km/h" }, 0, "steady speed with that use"),
+      kpi("Charge time", o.chargeTime, 1, `${fmt(state.battery.chargeStartSoc, 0)}→${fmt(state.battery.chargeEndSoc, 0)}% at ${fmt(o.packChargePower.value, 1)} kW`),
+      kpi("Charge C-rate", o.actualChargeCRate, 2, `${fmt(o.actualChargeCurrent.value, 0)} A`),
+      kpi("Pack proposal", { value: `${o.proposedSeries}S${o.proposedParallel}P` }, 0, `${fmt(o.proposedEnergy, 1)} kWh · ${fmt(o.proposedNominalV, 0)} V`)
+    ]) : invalidNotice(o, "Battery study");
+    const b = state.battery;
+    const inputs = `${panel("Range and energy", `<div class="fields">${input("battery.targetRange", "Target range", "km")}${input("battery.consumption", "Named consumption", "Wh/km")}${input("battery.averageSpeed", "Average speed", "km/h")}${input("battery.reserve", "Reserve", "%")}${input("battery.capacityDerate", "Capacity derate", "fraction", { step: "0.01" })}${input("battery.dischargeEfficiency", "Discharge efficiency", "fraction", { step: "0.01" })}</div>`)}
+      ${panel("AC charging", `<div class="fields">${input("battery.chargerPower", "OBC input rating", "kW")}${input("battery.chargeEfficiency", "Charge efficiency", "fraction", { step: "0.01" })}${input("battery.chargeTaperFactor", "CV taper factor", "×", { step: "0.01" })}${input("battery.desiredChargeHours", "Desired time", "h")}${input("battery.chargeStartSoc", "Start SOC", "%")}${input("battery.chargeEndSoc", "End SOC", "%")}${input("battery.supplyPhases", "AC phases", "", { type: "select", values: [{ value: 1, label: "Single" }, { value: 3, label: "Three" }] })}${input("battery.supplyVoltage", "Line voltage", "V")}${input("battery.supplyCurrent", "Line current limit", "A")}${input("battery.supplyPowerFactor", "Power factor", "fraction", { step: "0.01" })}</div>`)}
+      ${panel("Runtime and pack proposal", `<div class="fields">${input("battery.runtimePower", "Constant-power case", "kW")}${input("battery.runtimeCurrent", "Constant-current case", "A")}${input("battery.auxiliaryPower", "Auxiliary power", "kW")}${input("battery.studyVoltage", "Target nominal voltage", "V")}${input("battery.studyCapacityAh", "Minimum capacity", "Ah")}</div>`)}
+      ${panel("Linked inputs", linkedList([["Committed pack", pack ? `${state.electrical.series}S${state.electrical.parallel}P · ${fmt(pack.nominalV, 0)} V · ${fmt(pack.nominalEnergyKWh, 1)} kWh` : "—", "Energy & E/E"], ["Road load", `CdA ${fmt(state.vehicle.dragCoefficientArea, 2)} · Crr ${fmt(state.vehicle.rollingResistance, 3)}`, "Motor sizing"], ["Drive efficiency", c ? `${fmt(c.efficiency * 100, 1)}% (driveline × motor × inverter)` : "—", "Transmission · Motor sizing"], ["LV continuous", `${fmt(o?.lvContinuousDemand?.value, 2)} kW`, "Energy & E/E"]]))}`;
+    const results = ok ? `${c ? panel("Consumption and range vs steady speed", `${canvasChart("consumptionChart", "Traction consumption and range against steady road speed", 290)}${legend([["Traction Wh/km", "#a66516"], ["Range incl. LV (right axis)", "#1f6b50"], [`Named ${fmt(b.consumption, 0)} Wh/km`, "#6e56a0", true]])}`, `Level road, constant speed, ${fmt(c.mass, 0)} kg (${esc(state.meta.loadCase)}). Stop-go, regen, wind and gradients are not modelled — treat as an upper bound on range.`) : ""}
+      ${panel("Charge time vs charger power", `${canvasChart("chargeChart", "Charge time against on-board charger input power", 240)}${legend([["Charge time", "#266b92"], ["Current OBC", "#6e56a0", true]])}`, `Flattens where the AC supply (${fmt(o.supplyLimitKw, 1)} kW) or the pack charge limit (${fmt(o.packChargeLimitKw, 1)} kW) takes over — a bigger OBC buys nothing past that point.`)}
+      <div class="grid equal">${panel("Energy and range", dataTable(["", "Value"], [["Traction energy for target", withUnit(o.tractionLoadEnergy.value, "kWh", 2)], ["LV energy over the range", withUnit(o.lvEnergyOverRange.value, "kWh", 2)], ["Usable energy needed", withUnit(o.requiredUsable.value, "kWh", 2)], ["Gross energy needed", withUnit(o.requiredNominal.value, "kWh", 2)], ["Committed pack delivers", withUnit(o.deliveredEnergy.value, "kWh", 2)], ["Estimated range", withUnit(o.estimatedRange.value, "km", 0)]]))}
+      ${panel("Charging", dataTable(["", "Value"], [["AC supply available", withUnit(o.supplyPower.value, "kW", 2)], ["Power into pack", withUnit(o.packChargePower.value, "kW", 2)], ["Charge time", withUnit(o.chargeTime.value, "h", 2)], ["Charge current", withUnit(o.actualChargeCurrent.value, "A", 1)], [`OBC needed for ${fmt(b.desiredChargeHours, 1)} h`, withUnit(o.requiredObcPower.value, "kW", 2)], ["Line current needed", withUnit(o.requiredLineCurrent.value, "A", 1)]]))}
+      ${panel("Runtime", dataTable(["", "Value"], [[`At ${fmt(b.runtimePower, 0)} kW constant`, withUnit(o.constantPowerRuntime.value, "h", 2)], ["Distance at average speed", withUnit(o.runtimeDistance.value, "km", 0)], [`At ${fmt(b.runtimeCurrent, 0)} A constant`, withUnit(o.currentRuntime.value, "h", 2)], ["Discharge C-rate needed", withUnit(o.requiredCRate.value, "C", 2)], ["Pack power allowed", withUnit(o.permittedPower.value, "kW", 0)]]))}
+      ${panel("Pack proposal", dataTable(["", "Value"], [["Configuration", `${o.proposedSeries}S${o.proposedParallel}P · ${fmt(o.proposedCells, 0)} cells`], ["Voltage min / nom / max", `${fmt(o.proposedMinV, 0)} / ${fmt(o.proposedNominalV, 0)} / ${fmt(o.proposedMaxV, 0)} <small>V</small>`], ["Capacity", withUnit(o.proposedAh, "Ah", 0)], ["Gross energy", withUnit(o.proposedEnergy, "kWh", 1)], ["Margin over need", withUnit(o.energyMargin, "kWh", 1)]]) + `<button class="button primary" data-action="propose-battery" style="margin-top:12px">Download pack proposal</button>`)}</div>` : "";
+    const notes = notesRail("battery_calculators", {
+      why: "Range and charge time are what customers buy. The consumption curve shows how fast range falls with speed — aero dominates above about 60 km/h — and whether the named Wh/km is realistic.",
+      checksTitle: "Typical range",
+      how: ["Required gross energy = (range × Wh/km + LV energy) × (1 + reserve) / (SOC window × efficiency × derate).", "Consumption = road-load power / (driveline × motor × inverter) / speed; range adds LV power.", "Charge time = pack energy over the SOC window / min(AC supply, OBC) × efficiency, limited by the pack charge C-rate, × taper.", "First-order screens: temperature, ageing and thermal limits are not evaluated."]
+    });
+    return page(tab, { inputs, results, notes, kpis, study: true, top: electricalContextControls(false, "battery") });
+  }
+  function drawBatteryCharts() {
+    const o = outputs.battery; if (!o?.ok) return;
+    const c = o.consumptionCurve;
+    if (c) xyChart(document.querySelector("#consumptionChart"), {
+      xLabel: "Steady speed (km/h)", yLabel: "Traction consumption (Wh/km)", y2Label: "Range (km)", xMax: c.points.at(-1).speed,
+      series: [{ data: c.points.map(p => [p.speed, p.traction]), colour: "#a66516" }, { data: c.points.map(p => [p.speed, p.range]), colour: "#1f6b50", axis: "y2" }],
+      hLines: [{ y: Number(state.battery.consumption), label: `${fmt(state.battery.consumption, 0)} Wh/km named`, colour: "#6e56a0" }],
+      vLines: c.matchSpeed ? [{ x: c.matchSpeed, label: `${fmt(c.matchSpeed, 0)} km/h`, colour: "#6e56a0" }] : []
+    });
+    xyChart(document.querySelector("#chargeChart"), {
+      xLabel: "OBC input rating (kW)", yLabel: "Charge time (h)", xMin: 2, xMax: 23,
+      series: [{ data: o.chargeCurve.filter(p => p.obcKw >= 2).map(p => [p.obcKw, p.hours]), colour: "#266b92" }],
+      vLines: [{ x: Number(state.battery.chargerPower), label: "current OBC", colour: "#6e56a0" }],
+      hLines: Number(state.battery.desiredChargeHours) > 0 ? [{ y: Number(state.battery.desiredChargeHours), label: "desired", colour: "#8f9b97" }] : []
+    });
   }
 
+  // ---- Energy & E/E integration ------------------------------------------------------------------------
   function renderElectrical(tab) {
-    const o = outputs.electrical;
-    return `<section class="view ${activeTab === tab.id ? "active" : ""}" id="view-${tab.id}">${viewHead(tab)}<div class="grid two"><article class="panel"><h3>Committed pack and electrical limits</h3><div class="fields">${input("electrical.cellMinV","Cell minimum","V",{step:"0.01"})}${input("electrical.cellNomV","Cell nominal","V",{step:"0.01"})}${input("electrical.cellMaxV","Cell maximum","V",{step:"0.01"})}${input("electrical.cellAh","Cell capacity","Ah",{step:"0.1"})}${input("electrical.cellResistanceMilliOhm","Cell resistance","mΩ",{step:"0.1"})}${input("electrical.series","Series count","S")}${input("electrical.parallel","Parallel count","P")}${input("electrical.interconnectResistanceMilliOhm","Pack interconnect resistance","mΩ",{step:"0.1"})}${input("electrical.socMin","Minimum SOC","%")}${input("electrical.socMax","Maximum SOC","%")}${input("electrical.dischargeCLimit","Discharge C limit","C",{step:"0.1"})}${input("electrical.chargeCLimit","Charge C limit","C",{step:"0.1"})}${input("electrical.obcPower","Committed OBC input rating","kW")}${input("electrical.obcEfficiency","OBC efficiency","fraction",{step:"0.01"})}${input("electrical.dcdcCapacity","DC-DC continuous capacity","W")}${input("electrical.dcdcPeakCapacity","DC-DC peak capacity","W")}${input("electrical.lvBusVoltage","LV bus voltage","V")}${input("electrical.lvBatteryAh","LV backup capacity","Ah")}${input("electrical.lvBackupUsableFraction","LV usable fraction","fraction",{step:"0.01"})}</div><h3 style="margin-top:20px">First-order supporting screens</h3><div class="fields">${input("electrical.cableLength","HV one-way cable length","m",{step:"0.1"})}${input("electrical.cableArea","Cable area","mm²")}${input("electrical.cableParallel","Parallel conductors","count")}${input("electrical.prechargeCapMicroF","DC-link capacitance","µF")}${input("electrical.prechargeInitialCurrent","Initial precharge current","A")}${input("electrical.prechargeTarget","Precharge target","%")}</div></article><div><article class="panel"><h3>Functional architecture template</h3><p class="panel-intro">The selected template is a functional one-line preview, not a detailed wiring schematic or proof of correctness.</p>${invalidNotice(o,"Energy and E/E closure")}${electricalFlow(o.graph)}${o.violations?.length ? `<div class="notice danger" style="margin-top:12px"><strong>Violations</strong><ul>${o.violations.map(issue=>`<li>${esc(issue)}</li>`).join("")}</ul></div>` : ""}</article><article class="panel"><h3>Electrical closure outputs</h3><div class="metric-grid">${metric("Pack minimum voltage",{value:o.pack?.minV,unit:"V",definition:"Series count x cell minimum voltage"},{owner:"electrical"})}${metric("Pack nominal voltage",{value:o.pack?.nominalV,unit:"V",definition:"Series count x cell nominal voltage"},{owner:"electrical"})}${metric("Pack maximum voltage",{value:o.pack?.maxV,unit:"V",definition:"Series count x cell maximum voltage"},{owner:"electrical"})}${metric("Pack capacity",{value:o.pack?.capacityAh,unit:"Ah",definition:"Parallel count x cell capacity"},{owner:"electrical"})}${metric("Usable energy",{value:o.pack?.usableEnergyKWh,unit:"kWh",definition:"Nominal pack energy over entered SOC window"},{owner:"electrical"})}${metric("Bus current",o.busCurrent,{owner:"electrical"})}${metric("Loaded voltage",o.terminalVoltage,{owner:"electrical"})}${metric("Pack loss",o.packLoss,{owner:"electrical"})}${metric("Pack charge power",o.packChargePower,{owner:"electrical"})}${metric("LV continuous",o.lvContinuous,{owner:"electrical"})}${metric("LV peak / inrush",o.lvPeak,{owner:"electrical"})}${metric("DC-DC continuous headroom",o.dcdcHeadroom,{owner:"electrical"})}${metric("DC-DC peak headroom",o.dcdcPeakHeadroom,{owner:"electrical"})}${metric("Essential-load backup",o.lvBackupRuntime,{owner:"electrical"})}${metric("Electrical mass",o.electricalMass,{owner:"electrical"})}${metric("Electrical CG X",o.electricalCgX,{owner:"electrical"})}${metric("Electrical CG Z",o.electricalCgZ,{owner:"electrical"})}${metric("Mass reconciliation",o.massReconciliation,{owner:"electrical",digits:3})}${metric("Cable drop",o.cableDrop,{owner:"electrical",digits:3})}${metric("Cable loss",o.cableLoss,{owner:"electrical"})}${metric("Precharge time",o.prechargeTime,{owner:"electrical",digits:3})}${metric("Precharge energy",o.prechargeEnergy,{owner:"electrical",digits:1})}</div><div class="notice warning" style="margin-top:14px">${esc(o.boundaryNote || DATA.sourceNotes.electricalBoundary)}</div></article></div></div><article class="panel"><h3>Electrical component instances</h3><p class="panel-intro">Energy & E/E owns component selection, ratings and preferred placement. The displayed X/Z coordinates are preliminary placement proposals; a concept release requires an explicit Stance-owned committed mount link.</p><div class="component-row component-head"><span>Component</span><span>Mass kg</span><span>Preferred X</span><span>Preferred Z</span><span>Continuous</span><span>Peak</span><span>Inrush</span><span>Standby</span><span>Sleep</span><span></span></div><div id="componentRows">${state.components.map((component,index) => componentRow(component,index)).join("")}</div><button class="button" data-action="add-component" style="margin-top:12px">Add custom component</button></article></section>`;
+    const o = outputs.electrical, ok = o?.ok === true || Boolean(o?.pack), pack = o?.pack, e = state.electrical;
+    const kpis = pack ? kpiStrip("electrical", [
+      kpi("Pack", { value: `${e.series}S${e.parallel}P` }, 0, `${fmt(pack.minV, 0)}–${fmt(pack.maxV, 0)} V · ${fmt(pack.capacityAh, 0)} Ah`),
+      kpi("Usable energy", { value: pack.usableEnergyKWh, unit: "kWh" }, 1, `SOC ${fmt(e.socMin, 0)}–${fmt(e.socMax, 0)}%`),
+      kpi("Loaded voltage", o.terminalVoltage, 0, state.meta.electricalScenario === "drive" ? `${fmt(o.busCurrent.value, 0)} A at duty` : state.meta.electricalScenario),
+      kpi("DC-DC headroom", o.dcdcHeadroom, 0, `of ${fmt(e.dcdcCapacity, 0)} W continuous`),
+      kpi("LV backup", o.lvBackupRuntime, 0, "essential loads"),
+      kpi("E/E mass", o.electricalMass, 1, `CG ${fmt(o.electricalCgX.value, 0)}, ${fmt(o.electricalCgZ.value, 0)} mm`)
+    ]) : invalidNotice(o, "Energy and E/E closure");
+    const inputs = `${panel("Cell and pack", `<div class="fields">${input("electrical.cellMinV", "Cell min", "V", { step: "0.01" })}${input("electrical.cellNomV", "Cell nominal", "V", { step: "0.01" })}${input("electrical.cellMaxV", "Cell max", "V", { step: "0.01" })}${input("electrical.cellAh", "Cell capacity", "Ah", { step: "0.1" })}${input("electrical.cellResistanceMilliOhm", "Cell resistance", "mΩ", { step: "0.1" })}${input("electrical.interconnectResistanceMilliOhm", "Interconnect", "mΩ", { step: "0.1" })}${input("electrical.series", "Series", "S")}${input("electrical.parallel", "Parallel", "P")}${input("electrical.socMin", "SOC min", "%")}${input("electrical.socMax", "SOC max", "%")}${input("electrical.dischargeCLimit", "Discharge limit", "C", { step: "0.1" })}${input("electrical.chargeCLimit", "Charge limit", "C", { step: "0.1" })}</div>`)}
+      ${panel("Charger and LV", `<div class="fields">${input("electrical.obcPower", "OBC input rating", "kW")}${input("electrical.obcEfficiency", "OBC efficiency", "fraction", { step: "0.01" })}${input("electrical.dcdcCapacity", "DC-DC continuous", "W")}${input("electrical.dcdcPeakCapacity", "DC-DC peak", "W")}${input("electrical.lvBusVoltage", "LV bus", "V")}${input("electrical.lvBatteryAh", "LV backup", "Ah")}${input("electrical.lvBackupUsableFraction", "LV usable", "fraction", { step: "0.01" })}</div>`)}
+      ${panel("HV cable and precharge", `<div class="fields">${input("electrical.cableLength", "Cable one-way", "m", { step: "0.1" })}${input("electrical.cableArea", "Cable area", "mm²")}${input("electrical.cableParallel", "Parallel conductors", "count")}${input("electrical.prechargeCapMicroF", "DC-link C", "µF")}${input("electrical.prechargeInitialCurrent", "Initial precharge", "A")}${input("electrical.prechargeTarget", "Precharge target", "%")}</div>`)}`;
+    const results = pack ? `${panel("Connected architecture", `${electricalNetwork(o.graph)}${selectedComponentInspector(o.graph)}${o.violations?.length ? `<div class="notice danger" style="margin-top:12px"><strong>Violations</strong><ul>${o.violations.map(issue => `<li>${esc(issue)}</li>`).join("")}</ul></div>` : ""}`, "Select a node to edit that component. Power and communications are separate graphs.")}
+      ${panel("Pack voltage under load", `${canvasChart("packVoltageChart", "Pack terminal voltage against discharge current at nominal and minimum state of charge", 270)}${legend([["Nominal OCV", "#266b92"], ["At min SOC", "#b84d56"], ["Cut-off", "#8f9b97", true], ["Duty point", "#6e56a0"]])}`, "Where the low-SOC line meets cut-off is where the controller must start derating power.")}
+      ${o.lvBudget?.length ? panel("LV power budget", `${canvasChart("lvBudgetChart", "Continuous and peak LV power by component against DC-DC capacity", Math.max(180, 30 * o.lvBudget.length + 50))}${legend([["Continuous", "#266b92"], ["Peak / inrush", "#d75f36"]])}`, `${esc(state.meta.electricalScenario)} scenario. Total ${fmt(o.lvContinuous.value, 0)} W continuous / ${fmt(o.lvPeak.value, 0)} W peak against ${fmt(e.dcdcCapacity, 0)} / ${fmt(e.dcdcPeakCapacity, 0)} W DC-DC.`) : ""}
+      <div class="grid equal">${panel("HV system", dataTable(["", "Value"], [["Nominal / loaded voltage", `${fmt(pack.nominalV, 0)} / ${fmt(o.terminalVoltage.value, 0)} <small>V</small>`], ["Bus current", withUnit(o.busCurrent.value, "A", 0)], ["Pack I²R loss", withUnit(o.packLoss.value, "kW", 2)], ["Duty battery energy", withUnit(o.dutyBatteryEnergy?.value, "kWh", 2)], ["Pack charge power", withUnit(o.packChargePower.value, "kW", 2)], ["Cable drop / loss", `${fmt(o.cableDrop.value, 2)} V · ${fmt(o.cableLoss.value, 0)} W`], ["Cable current density", withUnit(o.currentDensity?.value, "A/mm²", 2)], ["Precharge", `${fmt(o.prechargeTime.value, 2)} s · ${fmt(o.prechargeEnergy.value, 0)} J`]]))}
+      ${panel("LV system", dataTable(["", "Value"], [["Continuous load", withUnit(o.lvContinuous.value, "W", 0)], ["Peak / inrush load", withUnit(o.lvPeak.value, "W", 0)], ["DC-DC continuous headroom", withUnit(o.dcdcHeadroom.value, "W", 0)], ["DC-DC peak headroom", withUnit(o.dcdcPeakHeadroom.value, "W", 0)], ["Essential-load backup", withUnit(o.lvBackupRuntime.value, "min", 0)]]))}</div>` : "";
+    const after = panel("Electrical component instances", `<p class="panel-intro">Energy & E/E owns selection, ratings and preferred placement. X/Z are placement proposals until Stance commits a mount.</p><div class="component-row component-head"><span>Component</span><span>Mass kg</span><span>Preferred X</span><span>Preferred Z</span><span>Continuous</span><span>Peak</span><span>Inrush</span><span>Standby</span><span>Sleep</span><span></span></div><div id="componentRows">${state.components.map((component, index) => componentRow(component, index)).join("")}</div><button class="button" data-action="add-component" style="margin-top:12px">Add custom component</button>`);
+    const notes = notesRail("electrical", {
+      why: "Closes the electrical side against the mechanical package: can the pack hold voltage at the duty current, can the DC-DC carry the LV load with margin, and where does the E/E mass sit.",
+      checksTitle: "Typical range",
+      how: ["Pack R = S × R_cell / P + interconnect; terminal V = OCV − I·R, solved at the duty battery power.", "Min-SOC OCV is a linear interpolation between cell min and max voltage (indicative).", "LV budget counts only components reachable from the DC-DC or LV battery in the selected scenario.", `${esc(o?.boundaryNote || DATA.sourceNotes.electricalBoundary)}`, o?.massReconciliation ? `Mass reconciliation with Stance: ${fmt(o.massReconciliation.value, 3)} kg.` : ""].filter(Boolean)
+    });
+    return page(tab, { inputs, results, notes, kpis, after, top: electricalContextControls(true, "electrical") });
+  }
+  function drawElectricalCharts() {
+    const o = outputs.electrical; if (!o?.pack) return;
+    const v = o.voltageCurve;
+    if (v) xyChart(document.querySelector("#packVoltageChart"), {
+      xLabel: "Discharge current (A)", yLabel: "Terminal voltage (V)", xMax: v.points.at(-1).current,
+      yMin: Math.floor(Math.min(v.cutoff, ...v.points.map(p => p.lowSoc)) / 20) * 20 - 20,
+      series: [{ data: v.points.map(p => [p.current, p.nominal]), colour: "#266b92" }, { data: v.points.map(p => [p.current, p.lowSoc]), colour: "#b84d56" }],
+      hLines: [{ y: v.cutoff, label: "cut-off", colour: "#8f9b97" }],
+      vLines: v.limitA ? [{ x: v.limitA, label: "C-limit", colour: "#8f9b97" }] : [],
+      points: state.meta.electricalScenario === "drive" && Number.isFinite(o.busCurrent.value) && Number.isFinite(o.terminalVoltage.value) ? [{ x: o.busCurrent.value, y: o.terminalVoltage.value, colour: "#6e56a0", label: "duty" }] : []
+    });
+    if (o.lvBudget?.length) barChart(document.querySelector("#lvBudgetChart"), {
+      xLabel: "Power (W)", labelWidth: 170,
+      rows: [...o.lvBudget].sort((a, b) => b.peak - a.peak).map(item => ({ label: item.label.length > 26 ? `${item.label.slice(0, 25)}…` : item.label, bars: [{ value: item.continuous, colour: "#266b92" }, { value: item.peak, colour: "#d75f36" }] }))
+    });
   }
 
   function componentRow(component, index) {
     const field = (key, type="number") => `<input type="${type}" data-component="${index}" data-component-key="${key}" value="${esc(component[key])}" aria-label="${esc(component.label)} ${key}">`;
     return `<div class="component-row">${field("label","text")}${field("mass")}${field("x")}${field("z")}${field("continuous")}${field("peak")}${field("inrush")}${field("standby")}${field("sleep")}<button class="icon-button" data-action="remove-component" data-index="${index}" aria-label="Remove ${esc(component.label)}">×</button></div>`;
-  }
-
-  function prependPanel(container, title, content, intro = "") {
-    if (!container) return;
-    const panel=document.createElement("article");panel.className="panel";
-    panel.innerHTML=`<h3>${esc(title)}</h3>${intro?`<p class="panel-intro">${esc(intro)}</p>`:""}${content}`;
-    container.prepend(panel);
-  }
-
-  function wrapSecondGridPanel(viewId) {
-    const grid=document.querySelector(`#view-${viewId} .grid.two`);if(!grid)return null;
-    const children=[...grid.children];if(children.length<2)return null;
-    if(children[1].tagName==="DIV")return children[1];
-    const right=document.createElement("div");grid.insertBefore(right,children[1]);right.appendChild(children[1]);return right;
-  }
-
-  function enhanceRenderedViews() {
-    const steeringRight=wrapSecondGridPanel("steering");
-    prependPanel(steeringRight,"Steering construction",steeringDiagram(),"Live tyre, rake, fork-axis and trail geometry in the master frame.");
-    const suspensionRight=document.querySelector("#view-suspension .grid.two > div");
-    prependPanel(suspensionRight,"Combined suspension construction",suspensionDiagram(),"Front fork and rear kinematics use the active hardpoints and travel solution.");
-    const antiRight=wrapSecondGridPanel("anti_squat");
-    prependPanel(antiRight,"Anti-squat construction",antiSquatDiagram(),"Drive line, sprocket pitch circles, swingarm, loaded CG and 100% reference.");
-    const sagRight=document.querySelector("#view-sag .grid.two > div");
-    prependPanel(sagRight,"Loaded motorcycle construction",sagDiagram(),"Active load case shown against the unladen reference.");
-    const batteryHead=document.querySelector("#view-battery_calculators .view-head");
-    batteryHead?.insertAdjacentHTML("afterend",electricalContextControls(false,"battery"));
-    const electricalHead=document.querySelector("#view-electrical .view-head");
-    electricalHead?.insertAdjacentHTML("afterend",electricalContextControls(true,"electrical"));
-    const electricalArchitecture=document.querySelector("#view-electrical .grid.two > div > .panel:first-child");
-    if(electricalArchitecture) electricalArchitecture.innerHTML=`<h3>Connected component architecture</h3><p class="panel-intro">Select a node to edit the underlying component. Power and communications remain separate graphs.</p>${invalidNotice(outputs.electrical,"Energy and E/E closure")}${electricalNetwork(outputs.electrical?.graph)}${selectedComponentInspector(outputs.electrical?.graph)}${outputs.electrical?.violations?.length?`<div class="notice danger" style="margin-top:12px"><strong>Violations</strong><ul>${outputs.electrical.violations.map(issue=>`<li>${esc(issue)}</li>`).join("")}</ul></div>`:""}`;
-    const electricalMetrics=document.querySelector("#view-electrical .metric-grid");
-    electricalMetrics?.insertAdjacentHTML("afterbegin",metric("Duty battery energy",outputs.electrical?.dutyBatteryEnergy,{owner:"electrical",digits:2}));
   }
 
   function renderApp() {
@@ -1311,11 +1725,10 @@
     window.MotoGeometryState = state;
     window.MotoGeometryOutputs = outputs;
     const html = [renderClosure(), ...DATA.tabs.map(tab => {
-      const renderer = { stance: renderStance, steering: renderSteering, suspension: renderSuspension, anti_squat: renderAntiSquat, sensitivity: renderSensitivity, sag: renderSag, powertrain: renderPowertrain, motor_sizing: renderMotor, braking: renderBraking, vehicle_calculators: renderVehicle, battery_calculators: renderBattery, electrical: renderElectrical }[tab.id];
+      const renderer = { stance: renderStance, steering: renderSteering, suspension: renderSuspension, anti_squat: renderAntiSquat, sensitivity: renderSensitivity, sag: renderSag, powertrain: renderPowertrain, motor_sizing: renderMotor, braking: renderBraking, battery_calculators: renderBattery, electrical: renderElectrical }[tab.id];
       return renderer(tab);
     })].join("");
     document.querySelector("#main").innerHTML = html;
-    enhanceRenderedViews();
     bindInputs();
     bindElectricalNetworkInteraction();
     updateChrome();
@@ -1342,7 +1755,6 @@
     if (path === "powertrain.gearCount") {
       const count = Math.max(1, Math.min(6, Math.round(Number(value) || 6)));
       if (Number(p.dutyGear) > count) { p.dutyGear = count; notes.push(`duty gear clamped to ${count}`); }
-      if (Number(state.vehicle.studyGear) > count) { state.vehicle.studyGear = count; notes.push(`study gear clamped to ${count}`); }
     }
     lastChange = `${path} changed by ${owner}${notes.length ? ` (${notes.join("; ")})` : ""}`;
     stale = new Set(dependencies[owner] || []);
@@ -1400,7 +1812,7 @@
       state.meta.revision+=1;
       state.meta.domainRevisions.powertrain=(state.meta.domainRevisions.powertrain||0)+1;
       lastChange=`Mechanical duty case changed to ${state.meta.dutyCase}`;
-      stale=new Set(["powertrain","vehicle_calculators","battery_calculators","electrical","sensitivity"]);
+      stale=new Set(["powertrain","motor_sizing","battery_calculators","electrical","sensitivity"]);
       renderApp();
     }));
   }
@@ -1471,15 +1883,15 @@
   }
 
   function drawCharts() {
-    if (activeTab === "suspension" && outputs.suspension?.points) plot(document.querySelector("#suspensionChart"), outputs.suspension.points, "wheelTravel", "motionRatio", "#266b92", "Wheel travel (mm)", "MR shock / wheel");
-    if (activeTab === "suspension") drawLoadDeflection(document.querySelector("#loadDeflectionChart"));
-    if (activeTab === "powertrain") { drawGearRatioComparison(document.querySelector("#gearRatioChart")); drawSpeedRpm(document.querySelector("#speedRpmChart")); }
-    if (activeTab === "motor_sizing") drawMotorCharts();
-    if (activeTab === "braking") drawBrakingCharts();
-    if (activeTab === "anti_squat" && outputs.antiSquat?.samples) plot(document.querySelector("#antiSquatChart"), outputs.antiSquat.samples, "wheelTravel", "anti", "#1f6b50", "Rear wheel travel (mm)", "Anti-squat (%)");
-    if (activeTab === "sag" && outputs.sag?.loadedRake) {
-      const canvas=document.querySelector("#loadedGeometryChart"); if(canvas){const rect=canvas.getBoundingClientRect(),ratio=window.devicePixelRatio||1;canvas.width=rect.width*ratio;canvas.height=rect.height*ratio;const c=canvas.getContext("2d");c.scale(ratio,ratio);const W=rect.width,H=rect.height;c.clearRect(0,0,W,H);const rows=[["UNLADEN",state.stance.targetRake,outputs.steering.groundTrail.value,state.stance.wheelbase,state.stance.groundClearance],["LOADED",outputs.sag.loadedRake.value,outputs.sag.loadedTrail.value,outputs.sag.loadedWheelbase.value,outputs.sag.loadedClearance.value]];const labels=["Rake (deg)","Trail (mm)","Wheelbase / 10", "Clearance (mm)"];rows.forEach((row,ri)=>{const color=ri?"#1f6b50":"#266b92";c.fillStyle=color;c.font="800 12px Inter";c.fillText(row[0],20,35+ri*130);row.slice(1).forEach((value,i)=>{const norm=i===2?value/10:value;const y=60+ri*130+i*25;c.fillStyle="#61717b";c.font="11px Inter";c.fillText(labels[i],20,y);c.fillStyle=color;c.fillRect(130,y-10,Math.max(2,Math.min(W-170,norm/160*(W-170))),12);c.fillText(fmt(value,1),W-55,y);});});}}
+    const drawers = {
+      stance: drawStanceCharts, steering: drawSteeringCharts, suspension: drawSuspensionChart, anti_squat: drawAntiSquatChart,
+      sensitivity: drawTornado, sag: drawSagCharts, braking: drawBrakingCharts, motor_sizing: drawMotorCharts,
+      powertrain: () => { drawGearRatioComparison(document.querySelector("#gearRatioChart")); drawSpeedRpm(document.querySelector("#speedRpmChart")); },
+      battery_calculators: drawBatteryCharts, electrical: drawElectricalCharts
+    };
+    try { drawers[activeTab]?.(); } catch (error) { console.error(error); }
   }
+
 
   function initChrome() {
     document.querySelector("#nav").innerHTML = `<div class="nav-group"><div class="nav-label">System</div><button class="nav-button" data-tab="closure" role="tab"><span class="nav-number">◉</span><span>Architecture closure</span><span class="nav-state"></span></button></div>` + groups.map(([label, ids]) => `<div class="nav-group"><div class="nav-label">${esc(label)}</div>${ids.map(id => {const tab=DATA.tabs.find(t=>t.id===id);return `<button class="nav-button" data-tab="${id}" role="tab"><span class="nav-number">${tab.ordinal}</span><span>${esc(tab.label)}</span><span class="nav-state"></span></button>`}).join("")}</div>`).join("");

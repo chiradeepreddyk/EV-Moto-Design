@@ -178,12 +178,13 @@ current**.
       ▼           ▼                ▼               ▼              ▼
  ergonomics    steering        suspension       gearing      electrical
  (2-link IK)  (trail, flop,   (swingarm arc,   (ratios,     (pack model,
-              wheelie limit)   linkage, MR)     sprockets)   graph, LV)
+              lean clearance)  linkage, MR)     sprockets)   graph, LV)
                   │                │               │              │
                   └────────┬───────┘               ├──────────────┤
                            ▼                       ▼              ▼
-                          sag                 vehicleStudy   batteryStudy
-                   (bisection solve)          (road load)    (range/charge)
+                          sag                 motorSizing    batteryStudy
+                   (bisection solve,          (road load,    (range/charge,
+                    braking geometry)          targets)       consumption curve)
                            │
                            ▼
                        antiSquat
@@ -199,18 +200,17 @@ current**.
 | --- | --- |
 | `tyre` | Nominal diameter from width/aspect/rim — the single source of every wheel radius |
 | `ergonomics` | Two-link inverse kinematics. `circleIntersections()` finds elbow from shoulder+grip and knee from hip+peg, then reports joint angles and clearances |
-| `steering` | Foale trail formula, wheel flop, kinematic turn radius, quasi-static braking transfer, rigid-body wheelie/stoppie limits from live CG |
+| `steering` | Foale trail formula, head drop, kinematic turn radius, clamp construction. Lean clearance of the footpeg tip and belly on a round tyre crown, and the lean the corner study needs including the Cossalter crown correction. Braking transfer, wheelie and stoppie moved to Sag, Motor sizing and Braking (the old screens used the frame CG coordinate instead of CG height above ground) |
 | `rearKinematicsAt` | Rotates the swingarm about the pivot to a target axle height, then solves the rocker/dogbone linkage by circle intersection. Supports `direct` and `linkage` architectures |
 | `suspension` | Sweeps `rearKinematicsAt` across travel, differentiates shock vs wheel displacement for local motion ratio, computes wheel rates and the fork air-spring compression |
-| `componentMassProperties` | Mass-weighted CG over glider + rider + pillion + luggage + all 15 electrical components; static beam solve for axle loads. Rejects a CG outside the wheelbase |
-| `sag` | 64-iteration bisection (`solveSagForce`) finds where dual-rate spring force equals sprung load, front and rear. Rear shock stroke is **interpolated from the linkage curve**, not aliased to wheel travel |
-| `antiSquat` | Upper chain tangent between sprocket pitch circles → intersect with the swingarm line → force centre → Foale anti-squat %, cross-checked against the Cossalter reciprocal |
+| `componentMassProperties` | Mass-weighted CG over glider + rider + pillion + luggage + all electrical components; static beam solve for axle loads; front share and CG height above the ground plane. Rejects a CG outside the wheelbase |
+| `sag` | 64-iteration bisection (`solveSagForce`) finds where dual-rate spring force equals sprung load, front and rear. Rear shock stroke is **interpolated from the linkage curve**, not aliased to wheel travel. Also solves the geometry under braking at the Braking tab's target deceleration (load transfer onto the same springs) and the rear/front ride-frequency ratio |
+| `antiSquat` | Upper chain tangent between sprocket pitch circles → intersect with the swingarm line → force centre → Foale anti-squat %, swept through travel and evaluated exactly at the active load-case rear sag |
 | `gearing` | Transmission tab. 1–6 gear ratio stack, overall ratios, per-gear speed/torque curves, cruise RPM. Final drive on the real hardpoints: ISO 606 open-chain length, even link count chosen inside the axle-adjuster window, closed-form centre distance for that count, axle move, sprocket pitch/outside/root diameters, wrap angle, peak chain tension and safety factor, chain speed, wear recurrence. Also the ±3-tooth sprocket matrix and a current-vs-proposed sprocket comparison. Chains and toothed belts (8M/14M) share one code path |
 | `motorSizing` | Motor sizing tab. Max RPM from top speed in the tallest ratio, base RPM from the constant-power speed ratio, then one minimum peak torque per target (top speed, grade at speed, 0–60, 0–100). Acceleration targets are bisected over an explicit-Euler run with instant best-gear selection and an optional wheelie cap. The same runs score the committed motor. Ratios come linked from `gearing` or as one manual overall ratio |
 | `braking` | Braking tab. Solo and Rider + pillion cases from live mass properties. Rigid-body load transfer, front-only / rear-only / combined adhesion limits (capped at the stoppie threshold), homologation-form stopping distance, brake torque at the adhesion limit, clamp force, line pressure and lever/pedal effort. Reproduces the KTM 390 sheet |
-| `vehicleStudy` | First-order road load: rolling + aero + grade → required power and shaft torque |
-| `electrical` | Pack S/P model, quadratic constant-Voc discharge solve, **breadth-first reachability over the LV graph** so a component only counts if it has a live source path, DC-DC headroom, cable drop, precharge RC |
-| `batteryStudy` | Required energy → proposed S/P pack, AC supply limits, charge time with taper, two runtime models |
+| `electrical` | Pack S/P model, quadratic constant-Voc discharge solve, **breadth-first reachability over the LV graph** so a component only counts if it has a live source path, DC-DC headroom, cable drop, precharge RC. Publishes the per-component LV budget and a terminal-voltage-vs-current curve at nominal and minimum-SOC OCV |
+| `batteryStudy` | Required energy → proposed S/P pack, AC supply limits, charge time with taper, two runtime models. `consumptionCurve` gives traction Wh/km and range against steady speed from the Motor sizing road-load model; a charge-time-vs-OBC-power curve shows where the supply or pack limit takes over |
 | `sensitivity` | Central difference — clones state, perturbs one parameter ±step, and **calls `calculate()` recursively** on each clone |
 
 ### The sensitivity recursion
@@ -301,14 +301,16 @@ declares who consumes whom:
 
 ```js
 stance      → steering, suspension, sag, powertrain, motor_sizing, braking, electrical,
-              sensitivity, vehicle_calculators, battery_calculators, anti_squat
+              sensitivity, battery_calculators, anti_squat
 steering    → suspension, sag, sensitivity
 suspension  → sag, anti_squat, sensitivity
 sag         → anti_squat, sensitivity, electrical
-powertrain  → motor_sizing, vehicle_calculators, anti_squat, electrical, battery_calculators
-electrical  → stance, sag, anti_squat, motor_sizing, braking, vehicle_calculators,
+powertrain  → motor_sizing, anti_squat, electrical, battery_calculators
+electrical  → stance, sag, steering, anti_squat, motor_sizing, braking,
               battery_calculators, sensitivity
-vehicle     → motor_sizing          (CdA, Crr and air density are linked into sizing)
+braking     → steering, sag          (target deceleration drives the braking geometry)
+motor       → battery_calculators    (top speed bounds the consumption curve)
+vehicle     → motor_sizing, battery_calculators   (road load, edited on Motor sizing)
 ```
 
 Downstream tabs get a `stale` badge and a nav dot. Note `electrical → stance`: component
@@ -461,3 +463,20 @@ uses g = 9.81 and π = 3.142).
    a plain-English definition and both status badges.
 4. **Escape everything** with `esc()` when interpolating into HTML.
 5. **Presentation state never touches the engineering revision.**
+
+
+## Page layout and engineering notes
+
+Every tab renders through `page()` into three columns: **inputs** (owned fields, then a
+read-only *Linked inputs* list naming each source tab), **results** (a KPI strip, the
+construction diagram, charts, then tables), and **engineering notes**. Below 1600 px the
+notes fold under the inputs; below 1100 px everything stacks.
+
+The notes rail holds *why it matters*, a typical-range table and *how it is calculated*.
+Ranges live in `PRD_DATA.benchmarkBands` (per vehicle category where it matters; ±Infinity
+for one-sided limits). `tabChecks` turns them into rows; the closure page's
+**Chief-engineer watch-list** lists every row outside its range with a link to the tab.
+They are indicative context, never pass/fail.
+
+`xyChart()` draws multi-series line charts (optional right axis, shaded bands, reference
+lines, labelled points); `barChart()` draws horizontal grouped bars with an optional band.
